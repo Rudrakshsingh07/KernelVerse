@@ -1,1 +1,18 @@
 .obsidian
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+
+# Docker
+docker-compose.override.yml
+
+# OS / editors
+.DS_Store
