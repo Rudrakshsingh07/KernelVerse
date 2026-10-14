@@ -1,0 +1,112 @@
+@import "tailwindcss";
+
+@theme {
+  --color-surface: #111317;
+  --color-surface-dim: #111317;
+  --color-surface-container-lowest: #0c0e12;
+  --color-surface-container-low: #1a1c20;
+  --color-surface-container: #1e2024;
+  --color-surface-container-high: #282a2e;
+  --color-surface-container-highest: #333539;
+  --color-surface-variant: #333539;
+  --color-surface-bright: #37393e;
+  --color-background: #111317;
+  --color-on-background: #e2e2e8;
+  --color-on-surface: #e2e2e8;
+  --color-on-surface-variant: #b9cacb;
+  --color-primary: #dbfcff;
+  --color-primary-container: #00f0ff;
+  --color-primary-fixed: #7df4ff;
+  --color-primary-fixed-dim: #00dbe9;
+  --color-on-primary: #00363a;
+  --color-on-primary-container: #006970;
+  --color-secondary: #bdc2ff;
+  --color-secondary-container: #2f3aa3;
+  --color-secondary-fixed: #e0e0ff;
+  --color-on-secondary: #131e8c;
+  --color-tertiary: #d9ffe9;
+  --color-tertiary-container: #5df3b6;
+  --color-tertiary-fixed: #68fcbf;
+  --color-tertiary-fixed-dim: #45dfa4;
+  --color-outline: #849495;
+  --color-outline-variant: #3b494b;
+  --color-error: #ffb4ab;
+
+  --font-display: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+body {
+  background: #111317;
+  color: #e2e2e8;
+  font-family: "Inter", sans-serif;
+  overscroll-behavior: none;
+}
+
+::-webkit-scrollbar {
+  display: none;
+}
+
+/* Remove numeric input spinners (up/down arrows) */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* Neumorphic building blocks matching running-page.html */
+.neo-panel {
+  border-radius: 0.75rem;
+  background: #1e2024;
+  box-shadow: 6px 6px 14px rgba(0, 0, 0, 0.65), -5px -5px 12px rgba(255, 255, 255, 0.04);
+  padding: 1.5rem;
+}
+
+.neo-inset {
+  border-radius: 0.75rem;
+  background: #0c0e12;
+  box-shadow: inset 3px 3px 7px rgba(0, 0, 0, 0.7), inset -2px -2px 6px rgba(255, 255, 255, 0.03);
+}
+
+.neo-inset-sm {
+  border-radius: 0.5rem;
+  background: #0c0e12;
+  box-shadow: inset 2px 2px 5px rgba(0, 0, 0, 0.7);
+}
+
+.neo-btn {
+  border-radius: 0.5rem;
+  background: #1a1c20;
+  box-shadow: 4px 4px 10px rgba(0, 0, 0, 0.7), -3px -3px 8px rgba(255, 255, 255, 0.05);
+  transition: all 0.15s;
+}
+.neo-btn:active {
+  box-shadow: inset 3px 3px 7px rgba(0, 0, 0, 0.7);
+}
+
+.neo-btn-round {
+  border-radius: 9999px;
+  background: #1e2024;
+  box-shadow: 4px 4px 10px rgba(0, 0, 0, 0.7), -3px -3px 8px rgba(255, 255, 255, 0.05);
+  transition: all 0.15s;
+}
+.neo-btn-round:active {
+  box-shadow: inset 3px 3px 7px rgba(0, 0, 0, 0.7);
+}
+
+.neo-input {
+  border-radius: 0.5rem;
+  background: #0c0e12;
+  box-shadow: inset 3px 3px 7px rgba(0, 0, 0, 0.7), inset -2px -2px 6px rgba(255, 255, 255, 0.03);
+  color: #e2e2e8;
+  padding: 0.25rem 0.5rem;
+}
+.neo-input:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 1px rgba(0, 240, 255, 0.4);
+}
