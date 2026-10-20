@@ -2,13 +2,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .engines import cpu_scheduling, memory_management, paging
+from .engines import cpu_scheduling, memory_management, paging, deadlocks, disk_scheduling
 from .engines.base import SimulationResult
 
 ENGINES = {
     "cpu-scheduling": cpu_scheduling,
     "memory-management": memory_management,
     "paging": paging,
+    "deadlocks": deadlocks,
+    "disk-scheduling": disk_scheduling,
 }
 
 app = FastAPI(title="KernelVerse API", version="0.1.0")
