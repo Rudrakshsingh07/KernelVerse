@@ -1,3 +1,24 @@
+"""
+Disk Scheduling simulation engine.
+
+Simulates disk-head movement across a set of I/O requests.  Supports five
+algorithms:
+
+    FCFS - First Come, First Served (serve requests in arrival order)
+    SSTF - Shortest Seek Time First (always pick the closest request)
+    SCAN - Elevator algorithm (move in one direction to disk end, reverse)
+    C-SCAN - Circular SCAN (go to end, jump to start, continue same direction)
+    LOOK - Like SCAN but only go as far as the last request in each direction
+
+The engine records one Step per head movement so the frontend can animate the
+head position and the sequence of served requests.  It produces total seek
+distance, average seek, head movement count, and the full head path.
+
+Public contract (see base.py):
+    validate(payload) -> list[str]
+    run(payload)      -> SimulationResult
+"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -8,6 +29,18 @@ ALGORITHMS = ["fcfs", "sstf", "scan", "cscan", "look"]
 
 
 def validate(payload: dict[str, Any]) -> list[str]:
+    """
+    Validate the disk-scheduling input payload.
+
+    Checks algorithm name, initial head position, disk size, request list, and
+    direction (required for SCAN/C-SCAN/LOOK).
+
+    Args:
+        payload: JSON dict with algorithm, head, disk_size, requests, direction.
+
+    Returns:
+        List of human-readable error strings; empty list means valid.
+    """
     errors: list[str] = []
     algorithm = payload.get("algorithm")
     if algorithm not in ALGORITHMS:
@@ -40,6 +73,23 @@ def validate(payload: dict[str, Any]) -> list[str]:
 
 
 def run(payload: dict[str, Any]) -> SimulationResult:
+    """
+    Execute the disk-scheduling simulation.
+
+    Depending on the algorithm, the head moves across the disk servicing
+    requests.  Each movement (including travel to the disk end or the jump
+    back in C-SCAN) is recorded as a Step with the seek distance and an
+    explanation.
+
+    After all requests are served, compute total seek, average seek, movement
+    count, and the full head sequence.
+
+    Args:
+        payload: Validated input with algorithm, head, disk_size, requests, direction.
+
+    Returns:
+        SimulationResult with steps, metrics, and warnings.
+    """
     algorithm = payload["algorithm"]
     head_start = int(payload["head"])
     disk_size = int(payload["disk_size"])
@@ -50,13 +100,14 @@ def run(payload: dict[str, Any]) -> SimulationResult:
     warnings: list[str] = []
     tick = 0
 
-    head = head_start
-    remaining = list(requests)
-    sequence: list[int] = [head_start]
-    seek_distances: list[int] = []
-    total_seek = 0
+    head = head_start           # current head position
+    remaining = list(requests)  # requests not yet served
+    sequence: list[int] = [head_start]  # full path the head takes (starts at head)
+    seek_distances: list[int] = []      # distance of each individual move
+    total_seek = 0                      # cumulative seek distance
 
     def _state(extra: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Build the state dict for a Step (head, remaining, sequence, etc.)."""
         base_state = {
             "algorithm": algorithm,
             "head": head,
@@ -72,6 +123,7 @@ def run(payload: dict[str, Any]) -> SimulationResult:
             base_state.update(extra)
         return base_state
 
+    # Record the initial state.
     steps.append(
         Step(
             tick=tick,
@@ -80,6 +132,9 @@ def run(payload: dict[str, Any]) -> SimulationResult:
         )
     )
 
+    # ==================================================================
+    # ALGORITHM: FCFS — serve requests in the exact order given
+    # ==================================================================
     if algorithm == "fcfs":
         for req in remaining:
             dist = abs(req - head)
@@ -103,10 +158,13 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                 )
             )
 
+    # ==================================================================
+    # ALGORITHM: SSTF — always serve the closest remaining request
+    # ==================================================================
     elif algorithm == "sstf":
         current = head_start
         while remaining:
-            # pick closest request
+            # Pick the request with the smallest distance from current head.
             closest = min(remaining, key=lambda r: (abs(r - current), r))
             dist = abs(closest - current)
             total_seek += dist
@@ -131,15 +189,20 @@ def run(payload: dict[str, Any]) -> SimulationResult:
             )
         head = current
 
+    # ==================================================================
+    # ALGORITHM: SCAN / C-SCAN / LOOK — directional (elevator-style)
+    # ==================================================================
     elif algorithm in ("scan", "cscan", "look"):
         current = head_start
         pending = sorted(remaining)
 
         if direction == "right":
-            # service requests >= current in ascending order
+            # Service requests at or above the current head, ascending.
             upper = sorted([r for r in pending if r >= current])
+            # Requests below current head, descending (for the return pass).
             lower = sorted([r for r in pending if r < current], reverse=True)
 
+            # --- First pass: move right, servicing upper requests ------
             for req in upper:
                 dist = abs(req - current)
                 total_seek += dist
@@ -164,7 +227,7 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                 )
 
             if algorithm == "scan":
-                # go to disk end then reverse
+                # SCAN: travel to the disk end, then reverse direction.
                 end = disk_size - 1
                 if current != end:
                     dist = abs(end - current)
@@ -187,6 +250,7 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                             explanation=f"Reached end of disk ({end}), reversing direction.",
                         )
                     )
+                # --- Return pass: move left, servicing lower requests ---
                 for req in lower:
                     dist = abs(req - current)
                     total_seek += dist
@@ -209,11 +273,12 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                             explanation=f"SCAN (left): serve {req}, head moves {sequence[-2]} → {req}, seek = {dist}.",
                         )
                     )
+
             elif algorithm == "cscan":
-                # jump to start (0) without servicing, then continue right
+                # C-SCAN: jump back to the start (0) without servicing,
+                # then continue servicing requests below the original head.
                 if current != 0:
-                    dist = current  # jump back to 0 (not counted as seek in some conventions; here we count movement)
-                    # C-SCAN typically does not count the jump as servicing but the head moves
+                    dist = current  # jump back to 0 (counted as movement here)
                     total_seek += dist
                     seek_distances.append(dist)
                     current = 0
@@ -233,6 +298,7 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                             explanation="C-SCAN: jump back to start (0) without servicing intermediate requests.",
                         )
                     )
+                # Service the requests that were below the starting head.
                 for req in sorted([r for r in pending if r < head_start]):
                     dist = abs(req - current)
                     total_seek += dist
@@ -255,8 +321,10 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                             explanation=f"C-SCAN: serve {req}, head moves {sequence[-2]} → {req}, seek = {dist}.",
                         )
                     )
+
             elif algorithm == "look":
-                # go only to last request in direction, then reverse (no disk end travel)
+                # LOOK: reverse direction at the last request (no travel to
+                # the physical disk end).
                 for req in lower:
                     dist = abs(req - current)
                     total_seek += dist
@@ -279,10 +347,17 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                             explanation=f"LOOK: serve {req}, head moves {sequence[-2]} → {req}, seek = {dist}.",
                         )
                     )
-        else:  # direction == "left"
+
+        else:
+            # ==========================================================
+            # direction == "left"
+            # ==========================================================
+            # Service requests at or below the current head, descending.
             lower = sorted([r for r in pending if r <= current], reverse=True)
+            # Requests above current head, ascending (for the return pass).
             upper = sorted([r for r in pending if r > current])
 
+            # --- First pass: move left, servicing lower requests ------
             for req in lower:
                 dist = abs(req - current)
                 total_seek += dist
@@ -307,6 +382,7 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                 )
 
             if algorithm == "scan":
+                # SCAN: travel to disk start (0), then reverse right.
                 end = 0
                 if current != end:
                     dist = abs(end - current)
@@ -329,6 +405,7 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                             explanation=f"Reached start of disk ({end}), reversing direction.",
                         )
                     )
+                # --- Return pass: move right, servicing upper requests ---
                 for req in upper:
                     dist = abs(req - current)
                     total_seek += dist
@@ -351,7 +428,10 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                             explanation=f"SCAN (right): serve {req}, head moves {sequence[-2]} → {req}, seek = {dist}.",
                         )
                     )
+
             elif algorithm == "cscan":
+                # C-SCAN left: jump to disk end, then service requests above
+                # the original head wrapping around.
                 if current != disk_size - 1:
                     end = disk_size - 1
                     dist = abs(end - current)
@@ -374,6 +454,7 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                             explanation="C-SCAN: jump to end of disk without servicing.",
                         )
                     )
+                # Service requests that were above the starting head.
                 for req in sorted([r for r in pending if r > head_start]):
                     dist = abs(req - current)
                     total_seek += dist
@@ -396,7 +477,9 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                             explanation=f"C-SCAN: serve {req}, head moves {sequence[-2]} → {req}, seek = {dist}.",
                         )
                     )
+
             elif algorithm == "look":
+                # LOOK left: reverse at the last request, then service upper.
                 for req in upper:
                     dist = abs(req - current)
                     total_seek += dist
@@ -422,6 +505,7 @@ def run(payload: dict[str, Any]) -> SimulationResult:
 
         head = current
 
+    # --- Aggregate metrics -------------------------------------------
     avg_seek = round(total_seek / len(requests), 3) if requests else 0
     metrics = {
         "total_seek": total_seek,
