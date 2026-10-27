@@ -4,15 +4,21 @@ Disk Scheduling simulation engine.
 Simulates disk-head movement across a set of I/O requests.  Supports five
 algorithms:
 
-    FCFS - First Come, First Served (serve requests in arrival order)
-    SSTF - Shortest Seek Time First (always pick the closest request)
-    SCAN - Elevator algorithm (move in one direction to disk end, reverse)
-    C-SCAN - Circular SCAN (go to end, jump to start, continue same direction)
-    LOOK - Like SCAN but only go as far as the last request in each direction
+    FCFS  - First Come, First Served (serve requests in arrival order)
+    SSTF  - Shortest Seek Time First (always pick the closest request)
+    SCAN  - Elevator algorithm (sweep to the disk edge, then reverse)
+    C-SCAN - Circular SCAN (sweep to the edge, wrap to the other edge,
+             and keep travelling in the same logical direction)
+    LOOK  - Like SCAN, but reverse at the last request instead of the edge
 
 The engine records one Step per head movement so the frontend can animate the
 head position and the sequence of served requests.  It produces total seek
 distance, average seek, head movement count, and the full head path.
+
+State contract used by the web UI (in ``Step.state``):
+    algorithm, head, direction, disk_size, requests, remaining, served,
+    sequence, seek_distances, total_seek, total_requests, last_served,
+    seek_distance, head_from, head_to, last_move_kind, is_service, note
 
 Public contract (see base.py):
     validate(payload) -> list[str]
@@ -26,6 +32,14 @@ from typing import Any
 from .base import SimulationResult, Step
 
 ALGORITHMS = ["fcfs", "sstf", "scan", "cscan", "look"]
+
+# Algorithms whose behaviour depends on the initial head direction.
+DIRECTIONAL_ALGORITHMS = {"scan", "cscan", "look"}
+
+
+def _is_int(value: Any) -> bool:
+    """Return True only for real integers (``bool`` is a subclass of ``int``)."""
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def validate(payload: dict[str, Any]) -> list[str]:
@@ -47,27 +61,29 @@ def validate(payload: dict[str, Any]) -> list[str]:
         errors.append(f"algorithm must be one of {ALGORITHMS}")
 
     head = payload.get("head")
-    if not isinstance(head, int) or head < 0:
+    if not _is_int(head) or head < 0:
         errors.append("head must be an integer >= 0")
 
     disk_size = payload.get("disk_size")
-    if not isinstance(disk_size, int) or disk_size <= 0:
+    if not _is_int(disk_size) or disk_size <= 0:
         errors.append("disk_size must be a positive integer")
-    elif isinstance(head, int) and head >= disk_size:
+    elif _is_int(head) and head >= disk_size:
         errors.append("head must be less than disk_size")
 
     requests = payload.get("requests")
     if not isinstance(requests, list) or not requests:
         errors.append("requests must be a non-empty list")
     else:
-        for i, r in enumerate(requests):
-            if not isinstance(r, int) or r < 0:
+        for i, request in enumerate(requests):
+            if not _is_int(request) or request < 0:
                 errors.append(f"requests[{i}] must be a non-negative integer")
-            elif isinstance(disk_size, int) and r >= disk_size:
-                errors.append(f"requests[{i}] ({r}) must be less than disk_size ({disk_size})")
+            elif _is_int(disk_size) and request >= disk_size:
+                errors.append(
+                    f"requests[{i}] ({request}) must be less than disk_size ({disk_size})"
+                )
 
     direction = payload.get("direction", "right")
-    if algorithm in ("scan", "cscan", "look") and direction not in ("left", "right"):
+    if algorithm in DIRECTIONAL_ALGORITHMS and direction not in ("left", "right"):
         errors.append("direction must be 'left' or 'right'")
     return errors
 
@@ -76,13 +92,10 @@ def run(payload: dict[str, Any]) -> SimulationResult:
     """
     Execute the disk-scheduling simulation.
 
-    Depending on the algorithm, the head moves across the disk servicing
-    requests.  Each movement (including travel to the disk end or the jump
-    back in C-SCAN) is recorded as a Step with the seek distance and an
-    explanation.
-
-    After all requests are served, compute total seek, average seek, movement
-    count, and the full head sequence.
+    Each movement of the head is recorded as a Step.  A movement is marked as
+    a service (``is_service=True`` and a ``last_served`` request) when it lands
+    on a pending I/O request.  SCAN/C-SCAN also record non-service turnaround
+    and wrap movements so the seek-time calculation includes the full sweep.
 
     Args:
         payload: Validated input with algorithm, head, disk_size, requests, direction.
@@ -94,20 +107,35 @@ def run(payload: dict[str, Any]) -> SimulationResult:
     head_start = int(payload["head"])
     disk_size = int(payload["disk_size"])
     requests = [int(r) for r in payload["requests"]]
-    direction = payload.get("direction", "right")
+
+    # FCFS and SSTF do not conceptually use a direction.  Keep "right" as the
+    # default so every Step has a consistent shape for the UI.
+    initial_direction = payload.get("direction", "right")
+    if initial_direction not in ("left", "right"):
+        initial_direction = "right"
 
     steps: list[Step] = []
     warnings: list[str] = []
     tick = 0
 
-    head = head_start           # current head position
-    remaining = list(requests)  # requests not yet served
+    head = head_start                 # current head position
+    direction = initial_direction     # most recent travel direction
+    remaining = list(requests)        # requests not yet served
+    served: list[int] = []            # requests in service order
     sequence: list[int] = [head_start]  # full path the head takes (starts at head)
     seek_distances: list[int] = []      # distance of each individual move
     total_seek = 0                      # cumulative seek distance
 
+    # Snapshot values describing the most recent movement.  They are stored in
+    # every Step so the UI can draw the "from → to" motion arrow.
+    last_served: int | None = None
+    last_seek = 0
+    last_from = head_start
+    last_to = head_start
+    last_move_kind = "init"
+
     def _state(extra: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Build the state dict for a Step (head, remaining, sequence, etc.)."""
+        """Build the complete state dict for a Step."""
         base_state = {
             "algorithm": algorithm,
             "head": head,
@@ -115,395 +143,336 @@ def run(payload: dict[str, Any]) -> SimulationResult:
             "disk_size": disk_size,
             "requests": requests,
             "remaining": list(remaining),
+            "served": list(served),
             "sequence": list(sequence),
             "seek_distances": list(seek_distances),
             "total_seek": total_seek,
+            "total_requests": len(requests),
+            "last_served": last_served,
+            "seek_distance": last_seek,
+            "head_from": last_from,
+            "head_to": last_to,
+            "last_move_kind": last_move_kind,
+            "is_service": last_move_kind == "serve",
         }
         if extra:
             base_state.update(extra)
         return base_state
 
-    # Record the initial state.
+    def record_move(
+        position: int,
+        *,
+        served_request: int | None = None,
+        kind: str,
+        note: str,
+        explanation: str,
+    ) -> None:
+        """
+        Move the head to ``position`` and append a Step.
+
+        Args:
+            position: Destination cylinder.
+            served_request: Request served by this move, or None for a
+                turnaround/wrap movement.
+            kind: "serve", "turn" (edge reversal), or "wrap" (C-SCAN jump).
+            note: Short state-machine note stored in the Step state.
+            explanation: Teaching sentence shown by the player.
+        """
+        nonlocal head, direction, tick, total_seek
+        nonlocal last_served, last_seek, last_from, last_to, last_move_kind
+
+        origin = head
+        distance = abs(position - origin)
+
+        # Track the physical direction of travel.  Zero-distance moves (serving
+        # a request already under the head) keep the previous direction.
+        if position > origin:
+            direction = "right"
+        elif position < origin:
+            direction = "left"
+
+        total_seek += distance
+        seek_distances.append(distance)
+        head = position
+        sequence.append(position)
+        tick += 1
+
+        last_from = origin
+        last_to = position
+        last_seek = distance
+        last_move_kind = kind
+        highlight: list[str] = []
+
+        if served_request is not None:
+            if served_request in remaining:
+                remaining.remove(served_request)
+            served.append(served_request)
+            last_served = served_request
+            highlight = [str(served_request)]
+
+        steps.append(
+            Step(
+                tick=tick,
+                state=_state({"note": note}),
+                highlight=highlight,
+                explanation=explanation,
+            )
+        )
+
+    # Record the initial state (tick 0).
     steps.append(
         Step(
             tick=tick,
-            state=_state({"note": "Initial state. Head starts at position."}),
-            explanation=f"Disk scheduling with {algorithm.upper()}. Head starts at {head_start}.",
+            state=_state(
+                {
+                    "note": "Initial state. No requests have been served yet.",
+                }
+            ),
+            explanation=(
+                f"Disk scheduling with {algorithm.upper()}. "
+                f"Head starts at cylinder {head_start} moving {direction}."
+            ),
         )
     )
 
     # ==================================================================
-    # ALGORITHM: FCFS — serve requests in the exact order given
+    # FCFS — serve requests in the exact order given
     # ==================================================================
     if algorithm == "fcfs":
-        for req in remaining:
-            dist = abs(req - head)
-            total_seek += dist
-            seek_distances.append(dist)
-            head = req
-            sequence.append(req)
-            tick += 1
-            steps.append(
-                Step(
-                    tick=tick,
-                    state=_state(
-                        {
-                            "last_served": req,
-                            "seek_distance": dist,
-                            "note": f"Moved head from {sequence[-2]} to {req} (seek {dist}).",
-                        }
-                    ),
-                    highlight=[str(req)],
-                    explanation=f"Serve request {req}: head moves {sequence[-2]} → {req}, seek = {dist}.",
-                )
+        for request in list(requests):
+            origin = head
+            record_move(
+                request,
+                served_request=request,
+                kind="serve",
+                note=f"FCFS: serve {request} next.",
+                explanation=(
+                    f"FCFS: serve request {request}; head moves {origin} → "
+                    f"{request}, seek = {abs(request - origin)}."
+                ),
             )
 
     # ==================================================================
-    # ALGORITHM: SSTF — always serve the closest remaining request
+    # SSTF — always serve the closest remaining request
     # ==================================================================
     elif algorithm == "sstf":
-        current = head_start
         while remaining:
-            # Pick the request with the smallest distance from current head.
-            closest = min(remaining, key=lambda r: (abs(r - current), r))
-            dist = abs(closest - current)
-            total_seek += dist
-            seek_distances.append(dist)
-            remaining.remove(closest)
-            current = closest
-            sequence.append(closest)
-            tick += 1
-            steps.append(
-                Step(
-                    tick=tick,
-                    state=_state(
-                        {
-                            "last_served": closest,
-                            "seek_distance": dist,
-                            "note": f"SSTF: closest to {sequence[-2]} is {closest} (seek {dist}).",
-                        }
-                    ),
-                    highlight=[str(closest)],
-                    explanation=f"SSTF: serve {closest} (shortest seek from {sequence[-2]}, distance {dist}).",
-                )
+            origin = head
+            # Break distance ties by cylinder number so traces are deterministic.
+            closest = min(remaining, key=lambda r: (abs(r - origin), r))
+            record_move(
+                closest,
+                served_request=closest,
+                kind="serve",
+                note=f"SSTF: nearest request to {origin} is {closest}.",
+                explanation=(
+                    f"SSTF: serve {closest}, the shortest seek from {origin} "
+                    f"(distance {abs(closest - origin)})."
+                ),
             )
-        head = current
 
     # ==================================================================
-    # ALGORITHM: SCAN / C-SCAN / LOOK — directional (elevator-style)
+    # SCAN / C-SCAN / LOOK — directional (elevator-style) algorithms
     # ==================================================================
-    elif algorithm in ("scan", "cscan", "look"):
-        current = head_start
-        pending = sorted(remaining)
+    elif algorithm in DIRECTIONAL_ALGORITHMS:
+        start = head_start
 
-        if direction == "right":
-            # Service requests at or above the current head, ascending.
-            upper = sorted([r for r in pending if r >= current])
-            # Requests below current head, descending (for the return pass).
-            lower = sorted([r for r in pending if r < current], reverse=True)
+        if initial_direction == "right":
+            # Requests ahead of the head are served in ascending order.
+            upper = sorted([r for r in requests if r >= start])
+            # Requests behind the head are served on the return/wrap pass.
+            lower = sorted([r for r in requests if r < start], reverse=True)
 
-            # --- First pass: move right, servicing upper requests ------
-            for req in upper:
-                dist = abs(req - current)
-                total_seek += dist
-                seek_distances.append(dist)
-                current = req
-                sequence.append(req)
-                remaining.remove(req)
-                tick += 1
-                steps.append(
-                    Step(
-                        tick=tick,
-                        state=_state(
-                            {
-                                "last_served": req,
-                                "seek_distance": dist,
-                                "note": f"Moving right: serve {req} (seek {dist}).",
-                            }
-                        ),
-                        highlight=[str(req)],
-                        explanation=f"SCAN (right): serve {req}, head moves {sequence[-2]} → {req}, seek = {dist}.",
-                    )
+            for request in upper:
+                origin = head
+                record_move(
+                    request,
+                    served_request=request,
+                    kind="serve",
+                    note=f"{algorithm.upper()}: moving right, serve {request}.",
+                    explanation=(
+                        f"{algorithm.upper()} (right): serve {request}; head moves "
+                        f"{origin} → {request}, seek = {abs(request - origin)}."
+                    ),
                 )
 
-            if algorithm == "scan":
-                # SCAN: travel to the disk end, then reverse direction.
+            if algorithm == "scan" and remaining:
+                # SCAN continues to the physical end of the disk before
+                # reversing, even if the last request was earlier.
                 end = disk_size - 1
-                if current != end:
-                    dist = abs(end - current)
-                    total_seek += dist
-                    seek_distances.append(dist)
-                    current = end
-                    sequence.append(end)
-                    tick += 1
-                    steps.append(
-                        Step(
-                            tick=tick,
-                            state=_state(
-                                {
-                                    "last_served": end,
-                                    "seek_distance": dist,
-                                    "note": f"Reached disk end {end}; reversing direction.",
-                                }
-                            ),
-                            highlight=[],
-                            explanation=f"Reached end of disk ({end}), reversing direction.",
-                        )
+                if head != end:
+                    origin = head
+                    record_move(
+                        end,
+                        kind="turn",
+                        note=f"SCAN: reached disk end {end}; reversing direction.",
+                        explanation=(
+                            f"SCAN: continue to the end of the disk ({end}), then "
+                            f"reverse (seek to edge = {abs(end - origin)})."
+                        ),
                     )
-                # --- Return pass: move left, servicing lower requests ---
-                for req in lower:
-                    dist = abs(req - current)
-                    total_seek += dist
-                    seek_distances.append(dist)
-                    current = req
-                    sequence.append(req)
-                    remaining.remove(req)
-                    tick += 1
-                    steps.append(
-                        Step(
-                            tick=tick,
-                            state=_state(
-                                {
-                                    "last_served": req,
-                                    "seek_distance": dist,
-                                    "note": f"Moving left: serve {req} (seek {dist}).",
-                                }
-                            ),
-                            highlight=[str(req)],
-                            explanation=f"SCAN (left): serve {req}, head moves {sequence[-2]} → {req}, seek = {dist}.",
-                        )
+                for request in lower:
+                    origin = head
+                    record_move(
+                        request,
+                        served_request=request,
+                        kind="serve",
+                        note=f"SCAN: moving left, serve {request}.",
+                        explanation=(
+                            f"SCAN (left): serve {request}; head moves {origin} → "
+                            f"{request}, seek = {abs(request - origin)}."
+                        ),
                     )
 
-            elif algorithm == "cscan":
-                # C-SCAN: jump back to the start (0) without servicing,
-                # then continue servicing requests below the original head.
-                if current != 0:
-                    dist = current  # jump back to 0 (counted as movement here)
-                    total_seek += dist
-                    seek_distances.append(dist)
-                    current = 0
-                    sequence.append(0)
-                    tick += 1
-                    steps.append(
-                        Step(
-                            tick=tick,
-                            state=_state(
-                                {
-                                    "last_served": 0,
-                                    "seek_distance": dist,
-                                    "note": "C-SCAN: jump back to start of disk.",
-                                }
-                            ),
-                            highlight=[],
-                            explanation="C-SCAN: jump back to start (0) without servicing intermediate requests.",
-                        )
-                    )
-                # Service the requests that were below the starting head.
-                for req in sorted([r for r in pending if r < head_start]):
-                    dist = abs(req - current)
-                    total_seek += dist
-                    seek_distances.append(dist)
-                    current = req
-                    sequence.append(req)
-                    remaining.remove(req)
-                    tick += 1
-                    steps.append(
-                        Step(
-                            tick=tick,
-                            state=_state(
-                                {
-                                    "last_served": req,
-                                    "seek_distance": dist,
-                                    "note": f"C-SCAN wrap: serve {req} (seek {dist}).",
-                                }
-                            ),
-                            highlight=[str(req)],
-                            explanation=f"C-SCAN: serve {req}, head moves {sequence[-2]} → {req}, seek = {dist}.",
-                        )
+            elif algorithm == "look" and remaining:
+                # LOOK reverses at the last request instead of the disk edge.
+                for request in lower:
+                    origin = head
+                    record_move(
+                        request,
+                        served_request=request,
+                        kind="serve",
+                        note=f"LOOK: reversed at last request; serve {request}.",
+                        explanation=(
+                            f"LOOK (left): reverse at the last request and serve "
+                            f"{request}; seek = {abs(request - origin)}."
+                        ),
                     )
 
-            elif algorithm == "look":
-                # LOOK: reverse direction at the last request (no travel to
-                # the physical disk end).
-                for req in lower:
-                    dist = abs(req - current)
-                    total_seek += dist
-                    seek_distances.append(dist)
-                    current = req
-                    sequence.append(req)
-                    remaining.remove(req)
-                    tick += 1
-                    steps.append(
-                        Step(
-                            tick=tick,
-                            state=_state(
-                                {
-                                    "last_served": req,
-                                    "seek_distance": dist,
-                                    "note": f"LOOK reverse: serve {req} (seek {dist}).",
-                                }
-                            ),
-                            highlight=[str(req)],
-                            explanation=f"LOOK: serve {req}, head moves {sequence[-2]} → {req}, seek = {dist}.",
-                        )
+            elif algorithm == "cscan" and remaining:
+                # C-SCAN returns to cylinder 0 and continues rightward.
+                end = disk_size - 1
+                if head != end:
+                    origin = head
+                    record_move(
+                        end,
+                        kind="turn",
+                        note=f"C-SCAN: travel to disk end {end}.",
+                        explanation=(
+                            f"C-SCAN: travel to the end of the disk ({end}) before "
+                            f"wrapping (seek to edge = {abs(end - origin)})."
+                        ),
+                    )
+                origin = head
+                record_move(
+                    0,
+                    kind="wrap",
+                    note="C-SCAN: wrapped from end to cylinder 0.",
+                    explanation=(
+                        f"C-SCAN: wrap from {origin} back to cylinder 0 without "
+                        f"serving requests (return seek = {origin})."
+                    ),
+                )
+                for request in sorted(remaining):
+                    origin = head
+                    record_move(
+                        request,
+                        served_request=request,
+                        kind="serve",
+                        note=f"C-SCAN: wrapped pass, serve {request}.",
+                        explanation=(
+                            f"C-SCAN (wrapped pass): serve {request}; head moves "
+                            f"{origin} → {request}, seek = {abs(request - origin)}."
+                        ),
                     )
 
         else:
-            # ==========================================================
+            # ----------------------------------------------------------
             # direction == "left"
-            # ==========================================================
-            # Service requests at or below the current head, descending.
-            lower = sorted([r for r in pending if r <= current], reverse=True)
-            # Requests above current head, ascending (for the return pass).
-            upper = sorted([r for r in pending if r > current])
+            # ----------------------------------------------------------
+            lower = sorted([r for r in requests if r <= start], reverse=True)
+            upper = sorted([r for r in requests if r > start])
 
-            # --- First pass: move left, servicing lower requests ------
-            for req in lower:
-                dist = abs(req - current)
-                total_seek += dist
-                seek_distances.append(dist)
-                current = req
-                sequence.append(req)
-                remaining.remove(req)
-                tick += 1
-                steps.append(
-                    Step(
-                        tick=tick,
-                        state=_state(
-                            {
-                                "last_served": req,
-                                "seek_distance": dist,
-                                "note": f"Moving left: serve {req} (seek {dist}).",
-                            }
-                        ),
-                        highlight=[str(req)],
-                        explanation=f"SCAN/LOOK (left): serve {req}, head moves {sequence[-2]} → {req}, seek = {dist}.",
-                    )
+            for request in lower:
+                origin = head
+                record_move(
+                    request,
+                    served_request=request,
+                    kind="serve",
+                    note=f"{algorithm.upper()}: moving left, serve {request}.",
+                    explanation=(
+                        f"{algorithm.upper()} (left): serve {request}; head moves "
+                        f"{origin} → {request}, seek = {abs(request - origin)}."
+                    ),
                 )
 
-            if algorithm == "scan":
-                # SCAN: travel to disk start (0), then reverse right.
-                end = 0
-                if current != end:
-                    dist = abs(end - current)
-                    total_seek += dist
-                    seek_distances.append(dist)
-                    current = end
-                    sequence.append(end)
-                    tick += 1
-                    steps.append(
-                        Step(
-                            tick=tick,
-                            state=_state(
-                                {
-                                    "last_served": end,
-                                    "seek_distance": dist,
-                                    "note": f"Reached disk start {end}; reversing direction.",
-                                }
-                            ),
-                            highlight=[],
-                            explanation=f"Reached start of disk ({end}), reversing direction.",
-                        )
+            if algorithm == "scan" and remaining:
+                # SCAN continues to cylinder 0 before reversing right.
+                if head != 0:
+                    origin = head
+                    record_move(
+                        0,
+                        kind="turn",
+                        note="SCAN: reached disk start 0; reversing direction.",
+                        explanation=(
+                            f"SCAN: continue to the start of the disk (0), then "
+                            f"reverse (seek to edge = {origin})."
+                        ),
                     )
-                # --- Return pass: move right, servicing upper requests ---
-                for req in upper:
-                    dist = abs(req - current)
-                    total_seek += dist
-                    seek_distances.append(dist)
-                    current = req
-                    sequence.append(req)
-                    remaining.remove(req)
-                    tick += 1
-                    steps.append(
-                        Step(
-                            tick=tick,
-                            state=_state(
-                                {
-                                    "last_served": req,
-                                    "seek_distance": dist,
-                                    "note": f"Moving right: serve {req} (seek {dist}).",
-                                }
-                            ),
-                            highlight=[str(req)],
-                            explanation=f"SCAN (right): serve {req}, head moves {sequence[-2]} → {req}, seek = {dist}.",
-                        )
+                for request in upper:
+                    origin = head
+                    record_move(
+                        request,
+                        served_request=request,
+                        kind="serve",
+                        note=f"SCAN: moving right, serve {request}.",
+                        explanation=(
+                            f"SCAN (right): serve {request}; head moves {origin} → "
+                            f"{request}, seek = {abs(request - origin)}."
+                        ),
                     )
 
-            elif algorithm == "cscan":
-                # C-SCAN left: jump to disk end, then service requests above
-                # the original head wrapping around.
-                if current != disk_size - 1:
-                    end = disk_size - 1
-                    dist = abs(end - current)
-                    total_seek += dist
-                    seek_distances.append(dist)
-                    current = end
-                    sequence.append(end)
-                    tick += 1
-                    steps.append(
-                        Step(
-                            tick=tick,
-                            state=_state(
-                                {
-                                    "last_served": end,
-                                    "seek_distance": dist,
-                                    "note": "C-SCAN: jump to end of disk.",
-                                }
-                            ),
-                            highlight=[],
-                            explanation="C-SCAN: jump to end of disk without servicing.",
-                        )
-                    )
-                # Service requests that were above the starting head.
-                for req in sorted([r for r in pending if r > head_start]):
-                    dist = abs(req - current)
-                    total_seek += dist
-                    seek_distances.append(dist)
-                    current = req
-                    sequence.append(req)
-                    remaining.remove(req)
-                    tick += 1
-                    steps.append(
-                        Step(
-                            tick=tick,
-                            state=_state(
-                                {
-                                    "last_served": req,
-                                    "seek_distance": dist,
-                                    "note": f"C-SCAN wrap: serve {req} (seek {dist}).",
-                                }
-                            ),
-                            highlight=[str(req)],
-                            explanation=f"C-SCAN: serve {req}, head moves {sequence[-2]} → {req}, seek = {dist}.",
-                        )
+            elif algorithm == "look" and remaining:
+                # LOOK reverses at the last request instead of cylinder 0.
+                for request in upper:
+                    origin = head
+                    record_move(
+                        request,
+                        served_request=request,
+                        kind="serve",
+                        note=f"LOOK: reversed at last request; serve {request}.",
+                        explanation=(
+                            f"LOOK (right): reverse at the last request and serve "
+                            f"{request}; seek = {abs(request - origin)}."
+                        ),
                     )
 
-            elif algorithm == "look":
-                # LOOK left: reverse at the last request, then service upper.
-                for req in upper:
-                    dist = abs(req - current)
-                    total_seek += dist
-                    seek_distances.append(dist)
-                    current = req
-                    sequence.append(req)
-                    remaining.remove(req)
-                    tick += 1
-                    steps.append(
-                        Step(
-                            tick=tick,
-                            state=_state(
-                                {
-                                    "last_served": req,
-                                    "seek_distance": dist,
-                                    "note": f"LOOK reverse: serve {req} (seek {dist}).",
-                                }
-                            ),
-                            highlight=[str(req)],
-                            explanation=f"LOOK: serve {req}, head moves {sequence[-2]} → {req}, seek = {dist}.",
-                        )
+            elif algorithm == "cscan" and remaining:
+                # C-SCAN goes to 0, jumps to the last cylinder, and keeps
+                # moving left (descending cylinders) on the wrapped pass.
+                if head != 0:
+                    origin = head
+                    record_move(
+                        0,
+                        kind="turn",
+                        note="C-SCAN: travel to disk start 0.",
+                        explanation=(
+                            f"C-SCAN: travel to the start of the disk (0) before "
+                            f"wrapping (seek to edge = {origin})."
+                        ),
                     )
-
-        head = current
+                origin = head
+                record_move(
+                    disk_size - 1,
+                    kind="wrap",
+                    note=f"C-SCAN: wrapped from 0 to cylinder {disk_size - 1}.",
+                    explanation=(
+                        f"C-SCAN: wrap from 0 to cylinder {disk_size - 1} without "
+                        f"serving requests (return seek = {disk_size - 1})."
+                    ),
+                )
+                for request in sorted(remaining, reverse=True):
+                    origin = head
+                    record_move(
+                        request,
+                        served_request=request,
+                        kind="serve",
+                        note=f"C-SCAN: wrapped pass, serve {request}.",
+                        explanation=(
+                            f"C-SCAN (wrapped pass): serve {request}; head moves "
+                            f"{origin} → {request}, seek = {abs(request - origin)}."
+                        ),
+                    )
 
     # --- Aggregate metrics -------------------------------------------
     avg_seek = round(total_seek / len(requests), 3) if requests else 0
@@ -511,10 +480,23 @@ def run(payload: dict[str, Any]) -> SimulationResult:
         "total_seek": total_seek,
         "average_seek": avg_seek,
         "head_movements": len(seek_distances),
+        "service_order": list(served),
+        "request_count": len(requests),
+        "initial_head": head_start,
+        "initial_direction": initial_direction,
+        "disk_size": disk_size,
         "sequence": sequence,
         "seek_distances": seek_distances,
         "algorithm": algorithm,
     }
-    if total_seek > disk_size * len(requests):
-        warnings.append("High total seek time — consider a different algorithm or direction.")
+
+    if len(served) != len(requests):
+        warnings.append(
+            f"Only {len(served)} of {len(requests)} requests were served."
+        )
+    if requests and total_seek > disk_size * len(requests):
+        warnings.append(
+            "High total seek distance — try SCAN, C-SCAN, or LOOK to reduce travel."
+        )
+
     return SimulationResult(steps=steps, metrics=metrics, warnings=warnings)

@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "KernelVerse — OS Concepts Simulator",
-  description: "Interactive OS concepts simulator: CPU scheduling, memory management, paging, and deadlocks visualized step by step.",
+  description: "Interactive OS concepts simulator: CPU scheduling, memory management, paging, disk scheduling, and deadlocks visualized step by step.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -24,16 +25,16 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="min-h-full flex flex-col bg-surface text-on-surface font-body">
         <header className="w-full bg-[#0c0e12] shadow-[inset_0_-3px_7px_rgba(0,0,0,0.7)]">
           <div className="h-16 w-full max-w-[1800px] mx-auto px-6 flex items-center justify-between">
-            <a href="/" className="flex items-center gap-3">
+            <Link href="/" className="flex items-center gap-3">
               <span className="font-display text-xl tracking-tight font-semibold">KernelVerse</span>
               <span className="font-mono text-[11px] uppercase tracking-wider px-2 py-0.5 rounded bg-surface-container-low text-primary-fixed-dim shadow-[inset_2px_2px_4px_rgba(0,0,0,0.7)]">OS SIMULATOR</span>
-            </a>
+            </Link>
             <nav className="hidden lg:flex items-center gap-1 p-1 rounded-xl bg-surface-container-lowest shadow-[inset_2px_2px_6px_rgba(0,0,0,0.8)]">
-              <a href="/simulator/cpu-scheduling" className="px-4 py-2 rounded-lg text-sm text-on-surface-variant hover:text-on-surface transition-all">CPU Scheduling</a>
-              <a href="/simulator/memory-management" className="px-4 py-2 rounded-lg text-sm text-on-surface-variant hover:text-on-surface transition-all">Memory Management</a>
-              <a href="/simulator/paging" className="px-4 py-2 rounded-lg text-sm text-on-surface-variant hover:text-on-surface transition-all">Paging</a>
-              <a href="/simulator/disk-scheduling" className="px-4 py-2 rounded-lg text-sm text-on-surface-variant hover:text-on-surface transition-all">Disk Scheduling</a>
-              <a href="/simulator/deadlocks" className="px-4 py-2 rounded-lg text-sm text-on-surface-variant hover:text-on-surface transition-all">Deadlocks</a>
+              <Link href="/simulator/cpu-scheduling" className="px-4 py-2 rounded-lg text-sm text-on-surface-variant hover:text-on-surface transition-all">CPU Scheduling</Link>
+              <Link href="/simulator/memory-management" className="px-4 py-2 rounded-lg text-sm text-on-surface-variant hover:text-on-surface transition-all">Memory Management</Link>
+              <Link href="/simulator/paging" className="px-4 py-2 rounded-lg text-sm text-on-surface-variant hover:text-on-surface transition-all">Paging</Link>
+              <Link href="/simulator/disk-scheduling" className="px-4 py-2 rounded-lg text-sm text-on-surface-variant hover:text-on-surface transition-all">Disk Scheduling</Link>
+              <Link href="/simulator/deadlocks" className="px-4 py-2 rounded-lg text-sm text-on-surface-variant hover:text-on-surface transition-all">Deadlocks</Link>
             </nav>
           </div>
         </header>

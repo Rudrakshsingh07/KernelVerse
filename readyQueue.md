@@ -15,9 +15,9 @@
 | CPU Scheduling | ✅ Complete (engine + visualizer + compare view) | Nothing |
 | Memory Management | ✅ Complete (engine + visualizer) | Nothing |
 | Paging | ✅ Complete (engine + visualizer + TLB) | Nothing |
-| Deadlocks | ⚠️ Stub UI only; no backend engine | Engine + visualizer |
-| Disk Scheduling | ⚠️ Stub UI only; no backend engine | Engine + visualizer |
-| Testing | ❌ No unit/integration tests | Engine tests, API contract tests |
+| Deadlocks | ✅ Complete (engine + visualizer) | Nothing (prevention techniques are future scope) |
+| Disk Scheduling | ✅ Complete (engine + visualizer + comparison view) | Nothing |
+| Testing | ⚠️ Disk Scheduling engine tests added; other engines still untested | Engine tests, API contract tests |
 | Docker | ❌ Removed in last commit | Optional re-add (docker-compose + Dockerfiles) |
 | Release hardening | ⚠️ Planned in ADR M5 | SEO pass, glossary, presets, CORS hardening, public-release checklist |
 
@@ -39,9 +39,9 @@ The shared foundation (`base.py` engine contract, `SimulationPlayer`, `types.ts`
 
 | ID | Task | Layer | Depends On | Definition of Done | Status |
 |----|------|-------|------------|-------------------|--------|
-| F1 | Deadlocks page: `web/src/app/simulator/deadlocks/page.tsx` | frontend | B1, B3 | Replaces stub; inputs for resources/allocation/max/need or requests; step-through visualization (resource allocation graph or state table); metrics (safe sequence / deadlock cycle); localStorage persistence; error handling for 422/501 | todo |
-| F2 | Disk Scheduling page: `web/src/app/simulator/disk-scheduling/page.tsx` | frontend | B2, B3 | Replaces stub; inputs for request queue + head position + direction; step-through head movement visualization (track/seek plot); metrics (total seek time, avg seek); localStorage persistence; error handling | todo |
-| F3 | Simulator index: add Deadlocks + Disk Scheduling to `web/src/app/simulator/page.tsx` TOPICS | frontend | F1, F2 | Status badge flips from "Planned" to "Complete"; route links work | todo |
+| F1 | Deadlocks page: `web/src/app/simulator/deadlocks/page.tsx` | frontend | B1, B3 | Replaces stub; inputs for resources/allocation/max/need or requests; step-through visualization (resource allocation graph or state table); metrics (safe sequence / deadlock cycle); localStorage persistence; error handling for 422/501 | done |
+| F2 | Disk Scheduling page: `web/src/app/simulator/disk-scheduling/page.tsx` | frontend | B2, B3 | Replaces stub; inputs for request queue + head position + direction; step-through head movement visualization (track/seek plot); metrics (total seek time, avg seek); localStorage persistence; error handling | done |
+| F3 | Simulator index: add Deadlocks + Disk Scheduling to `web/src/app/simulator/page.tsx` TOPICS | frontend | F1, F2 | Status badge flips from "Planned" to "Complete"; route links work | done |
 
 ### Phase 3: Comparison / quiz / hardening (depend on all engines)
 

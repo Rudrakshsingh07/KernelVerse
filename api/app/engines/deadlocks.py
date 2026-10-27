@@ -152,12 +152,15 @@ def run(payload: dict[str, Any]) -> SimulationResult:
         4. When found, simulate it finishing: release its allocated resources
            back to Work, append to safe sequence.
         5. If all finish -> safe. Otherwise -> unsafe / possible deadlock.
+        6. Append a final verdict step (complete or stuck).
 
     Detection mode:
-        1. Build a wait-for graph: P_i waits for P_j if P_i needs a resource
-           that is unavailable and held by P_j.
+        1. Build a wait-for graph one process at a time: P_i waits for P_j if
+           P_i needs more of a resource than is available and P_j holds an
+           instance of that resource.  Each inspected process gets a step so
+           the frontend can animate the graph being assembled.
         2. Run DFS with white/gray/black coloring to detect a cycle.
-        3. A cycle = deadlock; report the cycle path.
+        3. A cycle = deadlock; report the cycle path and append a verdict step.
 
     Args:
         payload: Validated input with mode, processes, resources, matrices.
@@ -183,6 +186,7 @@ def run(payload: dict[str, Any]) -> SimulationResult:
         p: {r: int(max_mat.get(p, {}).get(r, 0)) for r in rid_list} for p in processes
     }
     work: dict[str, int] = {r: int(available.get(r, 0)) for r in rid_list}
+    initial_available: dict[str, int] = dict(work)
     need: dict[str, dict[str, int]] = {
         p: {r: maxm[p][r] - alloc[p][r] for r in rid_list} for p in processes
     }
@@ -203,19 +207,48 @@ def run(payload: dict[str, Any]) -> SimulationResult:
             "need": {p: dict(need[p]) for p in processes},
             "available": dict(work),
             "work": dict(work),
+            "initial_available": dict(initial_available),
+            # Which processes currently hold at least one instance of each
+            # resource.  The frontend uses this to label wait-for edges.
+            "holders": {
+                r: [p for p in processes if alloc[p][r] > 0] for r in rid_list
+            },
         }
         if extra:
             base_state.update(extra)
         return base_state
 
     # Record the initial state (Need computed from Max - Allocation).
+    initial_extra: dict[str, Any] = {
+        "phase": "init",
+        "note": "Initial state. Need = Max - Allocation.",
+    }
+    if mode == "banker":
+        initial_extra.update(
+            {"safe_sequence": [], "finished": [], "unfinished": list(processes)}
+        )
+    else:
+        initial_extra.update(
+            {
+                "wait_for": {p: [] for p in processes},
+                "wait_edges": [],
+                "inspecting": None,
+            }
+        )
     steps.append(
         Step(
             tick=tick,
-            state=_state({"note": "Initial state. Need = Max - Allocation."}),
+            state=_state(initial_extra),
             explanation="Computed need matrix: Need = Max − Allocation.",
         )
     )
+
+    # Helper for human-readable vector strings such as "A=3, B=3, C=2".
+    def _fmt_vec(vec: dict[str, int], *, only_nonzero: bool = False) -> str:
+        items = [
+            (r, vec[r]) for r in rid_list if not only_nonzero or vec[r] != 0
+        ]
+        return ", ".join(f"{r}={value}" for r, value in items) or "none"
 
     # ==================================================================
     # MODE: Banker's safety algorithm (deadlock avoidance)
@@ -234,28 +267,46 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                 # Check if this process's remaining need can be satisfied.
                 if all(need[p][r] <= work[r] for r in rid_list):
                     # Simulate P finishing: release all its allocated resources.
+                    work_before = dict(work)
+                    released = dict(alloc[p])
                     for r in rid_list:
                         work[r] += alloc[p][r]
                     finish[p] = True
                     safe_sequence.append(p)
                     can_proceed = True
                     tick += 1
+                    release_text = _fmt_vec(released, only_nonzero=True)
+                    release_phrase = (
+                        f"releases {release_text}"
+                        if release_text != "none"
+                        else "releases no instances"
+                    )
                     steps.append(
                         Step(
                             tick=tick,
                             state=_state(
                                 {
+                                    "phase": "safety-check",
                                     "safe_sequence": list(safe_sequence),
-                                    "finished": list(finish.keys()),
+                                    "finished": [q for q in processes if finish[q]],
+                                    "unfinished": [
+                                        q for q in processes if not finish[q]
+                                    ],
                                     "last_executed": p,
-                                    "note": f"{p} can finish (Need <= Work); releases {alloc[p]}.",
+                                    "work_before": work_before,
+                                    "released": released,
+                                    "note": (
+                                        f"{p} can finish because Need <= Work. "
+                                        f"Its allocation returns to Work."
+                                    ),
                                 }
                             ),
                             highlight=[p],
                             explanation=(
-                                f"{p} selected: Need({{r: need[p][r] for r in rid_list}}) "
-                                f"<= Work({{r: work[r] for r in rid_list}}). "
-                                f"{p} finishes and releases its allocated resources."
+                                f"{p} selected: Need({_fmt_vec(need[p])}) "
+                                f"≤ Work({_fmt_vec(work_before)}). "
+                                f"{p} finishes and {release_phrase}; "
+                                f"Work becomes {_fmt_vec(work)}."
                             ),
                         )
                     )
@@ -268,8 +319,32 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                 "safe_sequence": safe_sequence,
                 "deadlock": False,
                 "unfinished_processes": [],
+                "finished_processes": list(safe_sequence),
+                "process_count": len(processes),
+                "resource_count": len(rid_list),
                 "algorithm": "banker's safety algorithm",
             }
+            tick += 1
+            steps.append(
+                Step(
+                    tick=tick,
+                    state=_state(
+                        {
+                            "phase": "complete",
+                            "safe_sequence": list(safe_sequence),
+                            "finished": list(safe_sequence),
+                            "unfinished": [],
+                            "note": (
+                                "Every process finished. The current state is safe."
+                            ),
+                        }
+                    ),
+                    explanation=(
+                        f"All {len(processes)} processes finished. "
+                        f"Safe sequence: {' → '.join(safe_sequence)}."
+                    ),
+                )
+            )
         else:
             unfinished = [p for p in processes if not finish[p]]
             metrics = {
@@ -277,27 +352,126 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                 "safe_sequence": safe_sequence,
                 "deadlock": True,
                 "unfinished_processes": unfinished,
+                "finished_processes": [p for p in processes if finish[p]],
+                "process_count": len(processes),
+                "resource_count": len(rid_list),
                 "algorithm": "banker's safety algorithm",
             }
             warnings.append(
                 f"Unsafe state: processes {', '.join(unfinished)} cannot finish — deadlock possible."
+            )
+            tick += 1
+            steps.append(
+                Step(
+                    tick=tick,
+                    state=_state(
+                        {
+                            "phase": "stuck",
+                            "safe_sequence": list(safe_sequence),
+                            "finished": [p for p in processes if finish[p]],
+                            "unfinished": unfinished,
+                            "note": (
+                                "No unfinished process has Need <= Work, so the "
+                                "safety algorithm cannot make progress."
+                            ),
+                        }
+                    ),
+                    highlight=unfinished,
+                    explanation=(
+                        "No unfinished process can satisfy Need <= Work. "
+                        f"The state is unsafe; unfinished: {', '.join(unfinished)}."
+                    ),
+                )
             )
 
     # ==================================================================
     # MODE: Deadlock detection via wait-for graph cycle detection
     # ==================================================================
     else:
-        # Build wait-for graph: P_i -> P_j if P_i needs a resource that is
-        # unavailable and currently held by P_j.
+        # Build the wait-for graph one process at a time.  P_i waits for P_j
+        # when P_i still needs more of resource r than Work[r] provides and
+        # P_j currently holds at least one instance of r.
         wait_for: dict[str, set[str]] = {p: set() for p in processes}
-        holder: dict[str, str] = {}  # resource -> process holding it (single-instance simplification)
+        edge_resources: dict[tuple[str, str], list[str]] = {}
+
+        def _edge_list(
+            edges: dict[tuple[str, str], list[str]]
+        ) -> list[dict[str, Any]]:
+            """Convert an edge -> resource map into a JSON-friendly list."""
+            return [
+                {"from": src, "to": dst, "via": sorted(set(resources))}
+                for (src, dst), resources in sorted(edges.items())
+            ]
+
         for p in processes:
+            added_resources: list[str] = []
             for r in rid_list:
-                if need[p][r] > 0 and work[r] <= 0:
-                    # Find another process holding this resource.
-                    for other in processes:
-                        if other != p and alloc[other].get(r, 0) > 0:
-                            wait_for[p].add(other)
+                if need[p][r] <= work[r]:
+                    continue
+                for other in processes:
+                    if other != p and alloc[other][r] > 0:
+                        wait_for[p].add(other)
+                        edge_resources.setdefault((p, other), []).append(r)
+                        added_resources.append(r)
+
+            tick += 1
+            if wait_for[p]:
+                targets = ", ".join(sorted(wait_for[p]))
+                via = ", ".join(sorted(set(added_resources))) or "none"
+                edge_word = "edge" if len(wait_for[p]) == 1 else "edges"
+                explanation = (
+                    f"{p} cannot satisfy its remaining Need from Work. "
+                    f"Resource(s) {via} are held by {targets}; "
+                    f"add wait-for {edge_word} from {p} to {targets}."
+                )
+            else:
+                explanation = (
+                    f"{p} does not need a resource that is held by another "
+                    f"process. No outgoing wait-for edge."
+                )
+
+            steps.append(
+                Step(
+                    tick=tick,
+                    state=_state(
+                        {
+                            "phase": "build",
+                            "wait_for": {q: sorted(wait_for[q]) for q in processes},
+                            "wait_edges": _edge_list(edge_resources),
+                            "inspecting": p,
+                            "note": f"Inspecting {p}'s unmet resource needs.",
+                        }
+                    ),
+                    highlight=[p],
+                    explanation=explanation,
+                )
+            )
+
+        full_wait_for = {p: sorted(wait_for[p]) for p in processes}
+        full_edges = _edge_list(edge_resources)
+
+        tick += 1
+        steps.append(
+            Step(
+                tick=tick,
+                state=_state(
+                    {
+                        "phase": "detect",
+                        "wait_for": full_wait_for,
+                        "wait_edges": full_edges,
+                        "inspecting": None,
+                        "note": (
+                            "Wait-for graph complete. Running DFS cycle detection."
+                        ),
+                    }
+                ),
+                explanation=(
+                    f"Wait-for graph complete with {len(full_edges)} "
+                    f"edge{'' if len(full_edges) == 1 else 's'}. "
+                    "Searching for a cycle with DFS."
+                ),
+            )
+        )
 
         # Detect a cycle using DFS with three-color marking.
         WHITE, GRAY, BLACK = 0, 1, 2
@@ -333,31 +507,80 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                     deadlock_cycle = list(cycle)
                     break
 
-        tick += 1
-        steps.append(
-            Step(
-                tick=tick,
-                state=_state({"wait_for": {p: sorted(wait_for[p]) for p in processes}}),
-                explanation="Built wait-for graph from unmet resource needs.",
-            )
-        )
-
+        waiting_processes = [p for p in processes if wait_for[p]]
         if deadlock_cycle:
             metrics = {
                 "safe": False,
                 "deadlock": True,
                 "deadlock_cycle": deadlock_cycle,
+                "waiting_processes": waiting_processes,
+                "wait_edges": full_edges,
                 "unfinished_processes": [],
+                "process_count": len(processes),
+                "resource_count": len(rid_list),
                 "algorithm": "wait-for-graph cycle detection",
             }
             warnings.append(f"Deadlock detected: cycle {' -> '.join(deadlock_cycle)}.")
+            tick += 1
+            steps.append(
+                Step(
+                    tick=tick,
+                    state=_state(
+                        {
+                            "phase": "complete",
+                            "wait_for": full_wait_for,
+                            "wait_edges": full_edges,
+                            "inspecting": None,
+                            "cycle": deadlock_cycle,
+                            "deadlock": True,
+                            "note": (
+                                f"Cycle found: {' → '.join(deadlock_cycle)}. "
+                                "Deadlock exists."
+                            ),
+                        }
+                    ),
+                    highlight=list(dict.fromkeys(deadlock_cycle[:-1])),
+                    explanation=(
+                        f"Cycle detected: {' → '.join(deadlock_cycle)}. "
+                        "The wait-for graph contains a cycle, so a deadlock exists."
+                    ),
+                )
+            )
         else:
             metrics = {
                 "safe": True,
                 "deadlock": False,
                 "deadlock_cycle": [],
+                "waiting_processes": waiting_processes,
+                "wait_edges": full_edges,
                 "unfinished_processes": [],
+                "process_count": len(processes),
+                "resource_count": len(rid_list),
                 "algorithm": "wait-for-graph cycle detection",
             }
+            tick += 1
+            steps.append(
+                Step(
+                    tick=tick,
+                    state=_state(
+                        {
+                            "phase": "complete",
+                            "wait_for": full_wait_for,
+                            "wait_edges": full_edges,
+                            "inspecting": None,
+                            "cycle": [],
+                            "deadlock": False,
+                            "note": (
+                                "No cycle found in the wait-for graph. "
+                                "No deadlock exists."
+                            ),
+                        }
+                    ),
+                    explanation=(
+                        "No cycle was found in the wait-for graph, so the "
+                        "system is not deadlocked."
+                    ),
+                )
+            )
 
     return SimulationResult(steps=steps, metrics=metrics, warnings=warnings)

@@ -2,14 +2,12 @@
 CPU Scheduling simulation engine.
 
 Simulates process execution on a single CPU, tick by tick (1 tick = 1 CPU time
-unit).  Supports six algorithms:
+unit).  Supports four algorithms:
 
     FCFS  - First Come, First Served (non-preemptive)
     SJF   - Shortest Job First (non-preemptive)
     SRTF  - Shortest Remaining Time First (preemptive SJF)
-    Priority - Priority scheduling (non-preemptive, lower number = higher priority)
     RR    - Round Robin (preemptive by time quantum)
-    MLQ   - Multilevel Queue (two queues; high-priority queue preempts low)
 
 Each process may optionally perform I/O: after consuming ``after_cpu`` units of
 CPU time, it blocks for ``duration`` ticks and then re-enters the ready queue.
@@ -32,7 +30,7 @@ from .base import SimulationResult, Step
 
 # All algorithm names this engine accepts.  Used by validate() and by the
 # frontend to populate the algorithm dropdown.
-ALGORITHMS = ["fcfs", "sjf", "srtf", "priority", "rr", "mlq"]
+ALGORITHMS = ["fcfs", "sjf", "srtf", "rr"]
 
 # Safety cap: the simulation loop stops after this many ticks even if not all
 # processes have finished.  Prevents runaway loops on bad input.
@@ -44,8 +42,8 @@ def validate(payload: dict[str, Any]) -> list[str]:
     Validate the CPU-scheduling input payload.
 
     Checks that the algorithm is supported, the process list is well-formed,
-    and algorithm-specific fields (quantum for RR/MLQ, priority for
-    Priority/MLQ, queue for MLQ, I/O timing) are present and correct.
+    and algorithm-specific fields (quantum for RR, I/O timing) are present and
+    correct.
 
     Args:
         payload: JSON dict with keys "algorithm" and "processes".
@@ -85,12 +83,6 @@ def validate(payload: dict[str, Any]) -> list[str]:
         if not isinstance(burst, int) or burst <= 0:
             errors.append(f"process '{pid}': burst must be an integer > 0")
 
-        # Priority and queue fields are only required for certain algorithms.
-        if algorithm in ("priority", "mlq") and not isinstance(p.get("priority", 1), int):
-            errors.append(f"process '{pid}': priority must be an integer")
-        if algorithm == "mlq" and p.get("queue", 0) not in (0, 1):
-            errors.append(f"process '{pid}': queue must be 0 (high) or 1 (low)")
-
         # I/O specification: io_arrival (CPU units consumed before blocking)
         # and io_duration (how many ticks the process stays blocked).
         io_dur = p.get("io_duration", 0) or 0
@@ -107,15 +99,11 @@ def validate(payload: dict[str, Any]) -> list[str]:
             if isinstance(burst, int) and io_at >= burst:
                 errors.append(f"process '{pid}': io_arrival must be less than its burst")
 
-    # Round Robin and MLQ require a positive quantum.
+    # Round Robin requires a positive quantum.
     if algorithm == "rr":
         q = payload.get("quantum", 2)
         if not isinstance(q, int) or q < 1:
             errors.append("quantum must be an integer >= 1")
-    if algorithm == "mlq":
-        q = payload.get("quantum", 2)
-        if not isinstance(q, int) or q < 1:
-            errors.append("quantum must be an integer >= 1 (used by the high-priority queue)")
     return errors
 
 
@@ -141,7 +129,7 @@ def _snapshot(
         ready: List of process IDs waiting in the ready queue (in order).
         completed: List of process IDs that have finished execution.
         remaining: Map of process ID -> remaining CPU burst time.
-        processes: Full process list (for arrival/burst/priority metadata).
+        processes: Full process list (for arrival/burst metadata).
         blocked: Map of process ID -> remaining I/O ticks (optional).
 
     Returns:
@@ -159,8 +147,6 @@ def _snapshot(
                 "id": p["id"],
                 "arrival": p["arrival"],
                 "burst": p["burst"],
-                "priority": p.get("priority", 1),
-                "queue": p.get("queue", 0),
                 "remaining": remaining[p["id"]],
             }
             for p in processes
@@ -175,7 +161,7 @@ def run(payload: dict[str, Any]) -> SimulationResult:
     This is the core simulation loop.  At each tick it:
       1. Adds newly arrived processes to the ready queue.
       2. Decrements I/O timers for blocked processes and re-queues completed ones.
-      3. Handles preemption (SRTF, RR quantum expiry, MLQ queue priority).
+      3. Handles preemption (SRTF and RR quantum expiry).
       4. Dispatches the next process from the ready queue if the CPU is idle.
       5. Runs the current process for one tick (decrements remaining burst,
          increments waiting time for all ready processes, checks for I/O
@@ -200,8 +186,6 @@ def run(payload: dict[str, Any]) -> SimulationResult:
     )
     # Apply defaults and normalize the optional I/O specification.
     for p in processes:
-        p.setdefault("priority", 1)       # default priority if not provided
-        p.setdefault("queue", 0)          # default to high-priority queue
         # Normalize I/O spec: flat fields (io_duration/io_arrival) or nested dict.
         if isinstance(p.get("io"), dict):
             pass                          # already in {after_cpu, duration} form
@@ -255,7 +239,7 @@ def run(payload: dict[str, Any]) -> SimulationResult:
         """
         Select and remove the best process from a queue according to a key.
 
-        Used by SJF, SRTF, Priority, and RR to choose the next process.  The
+        Used by SJF, SRTF, and RR to choose the next process.  The
         key returns a sortable tuple; Python's min() picks the smallest.
         """
         chosen = min(queue, key=key)
@@ -319,25 +303,7 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                     running = None
                     quantum_used = 0
 
-        # --- Step F: MLQ preemption and quantum ---------------------
-        if algorithm == "mlq":
-            high_ready = [pid for pid in ready if by_id[pid]["queue"] == 0]
-            # A low-queue process is preempted if any high-queue process is ready.
-            if running is not None and by_id[running]["queue"] == 1 and high_ready:
-                ready.append(running)
-                enqueued_at[running] = time
-                note += f"{running} preempted by high-priority queue. "
-                running = None
-                quantum_used = 0
-            # A high-queue process is preempted when its quantum expires.
-            if running is not None and by_id[running]["queue"] == 0 and quantum_used >= quantum:
-                ready.append(running)
-                enqueued_at[running] = time
-                note += f"{running}'s quantum ({quantum}) expired. "
-                running = None
-                quantum_used = 0
-
-        # --- Step G: CPU idle? Dispatch next process from ready -----
+        # --- Step F: CPU idle? Dispatch next process from ready -----
         if running is None and ready:
             if algorithm == "fcfs":
                 # FCFS: pick the process that arrived first (front of queue).
@@ -348,25 +314,15 @@ def run(payload: dict[str, Any]) -> SimulationResult:
             elif algorithm == "srtf":
                 # SRTF: pick the process with the smallest remaining burst.
                 running = pick(ready, lambda pid: (remaining[pid], enqueued_at[pid], pid))
-            elif algorithm == "priority":
-                # Priority: pick the process with the smallest priority number.
-                running = pick(ready, lambda pid: (by_id[pid]["priority"], enqueued_at[pid], pid))
             elif algorithm == "rr":
                 # RR: pick the process that has been waiting longest (FIFO).
                 running = pick(ready, lambda pid: (enqueued_at[pid], pid))
-            elif algorithm == "mlq":
-                # MLQ: always prefer high-priority queue (0) over low (1).
-                highs = [pid for pid in ready if by_id[pid]["queue"] == 0]
-                if highs:
-                    running = pick(ready, lambda pid: (0 if by_id[pid]["queue"] == 0 else 1, enqueued_at[pid], pid))
-                else:
-                    running = pick(ready, lambda pid: (enqueued_at[pid], pid))
             quantum_used = 0                     # new process starts a fresh quantum
             note += f"{running} starts running. "
             if running not in started:
                 started[running] = time          # record first-run tick (for response time)
 
-        # --- Step H: Record the step (CPU idle or running) -----------
+        # --- Step G: Record the step (CPU idle or running) -----------
         if running is None:
             last_running = None
             steps.append(
@@ -391,7 +347,7 @@ def run(payload: dict[str, Any]) -> SimulationResult:
             for pid in ready:
                 waiting[pid] += 1
 
-            # --- Step I: Check if the running process should block for I/O ---
+            # --- Step H: Check if the running process should block for I/O ---
             blocked_now: str | None = None
             io = by_id[running].get("io")
             executed = by_id[running]["burst"] - remaining[running]
@@ -434,11 +390,10 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                 "id": pid,
                 "arrival": p["arrival"],
                 "burst": p["burst"],
-                "priority": p["priority"],
-                "queue": p["queue"],
                 "waiting": waiting[pid],
                 "turnaround": turnaround,
                 "response": response,
+                "started_at": started.get(pid),
                 "finished_at": finished_at.get(pid),
             }
         )

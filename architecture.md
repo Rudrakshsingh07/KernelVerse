@@ -35,13 +35,15 @@ The backend is a FastAPI application. Each OS topic has its own Python engine mo
 ```
 api/
 ├── requirements.txt                  # Python dependencies: fastapi, uvicorn, pydantic
+├── tests/                            # backend unit tests
+│   └── test_disk_scheduling.py       # disk-scheduling engine regression tests
 ├── app/                              # FastAPI application package
 │   ├── __init__.py                   # marks app/ as a Python package
 │   ├── main.py                       # FastAPI app: /health, /simulate, engine dispatcher routing by topic
 │   └── engines/                      # one module per simulation topic
 │       ├── __init__.py               # marks engines/ as a Python package
 │       ├── base.py                   # shared Step / SimulationResult models + SimulationEngine protocol contract
-│       ├── cpu_scheduling.py         # FCFS, SJF, SRTF, Priority, Round Robin, Multilevel Queue (+ I/O blocking)
+│       ├── cpu_scheduling.py         # FCFS, SJF, SRTF, Round Robin (+ I/O blocking)
 │       ├── memory_management.py      # contiguous allocation & segmentation; first/best/worst-fit strategies
 │       ├── paging.py                 # FIFO, LRU, Optimal page replacement + optional TLB simulation
 │       ├── deadlocks.py              # Banker's safety algorithm + wait-for-graph deadlock detection
@@ -52,7 +54,7 @@ api/
 
 | File | Algorithm(s) covered |
 |------|----------------------|
-| `cpu_scheduling.py` | FCFS, SJF, SRTF, Priority, Round Robin, Multilevel Queue |
+| `cpu_scheduling.py` | FCFS, SJF, SRTF, Round Robin |
 | `memory_management.py` | Contiguous allocation, segmentation, first/best/worst-fit |
 | `paging.py` | FIFO, LRU, Optimal page replacement, TLB hits/misses |
 | `deadlocks.py` | Banker's avoidance, wait-for-graph detection |

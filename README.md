@@ -4,13 +4,13 @@ KernelVerse is an interactive OS concepts simulator and teaching aid. It lets a 
 
 Topics in scope (build order):
 
-1. CPU Scheduling — FCFS, SJF, SRTF, Priority, Round Robin, Multilevel Queue (with I/O blocking)
+1. CPU Scheduling — FCFS, SJF, SRTF, Round Robin (with I/O blocking)
 2. Memory Management — contiguous allocation (first/best/worst fit) + segmentation, fragmentation
 3. Paging — FIFO / LRU / Optimal replacement, optional TLB
-4. Deadlocks — detection, avoidance (Banker's), prevention *(planned)*
-5. Disk Scheduling *(planned)*
+4. Deadlocks — wait-for-graph detection, avoidance (Banker's algorithm)
+5. Disk Scheduling — FCFS, SSTF, SCAN, C-SCAN, LOOK
 
-Status: CPU, Memory Management, and Paging are fully runnable end-to-end (FastAPI engines + Next.js visualizers). Deadlocks and Disk Scheduling are stubbed (UI + API return "not implemented").
+Status: all five topics are fully runnable end-to-end (FastAPI engines + Next.js visualizers).
 
 ## Architecture (no Docker)
 
@@ -164,7 +164,9 @@ KernelVerse/
 │   ├── app/
 │   │   ├── main.py           /health, /simulate routes
 │   │   └── engines/          base.py, cpu_scheduling.py,
-│   │                         memory_management.py, paging.py
+│   │                         memory_management.py, paging.py,
+│   │                         deadlocks.py, disk_scheduling.py
+│   ├── tests/                engine unit tests
 │   └── requirements.txt
 ├── web/                      Next.js frontend
 │   └── src/

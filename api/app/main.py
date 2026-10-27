@@ -26,7 +26,7 @@ from .engines.base import SimulationResult
 # Python engine module.  When a new topic is added, insert a new entry here
 # and create the matching engine module under engines/.
 ENGINES = {
-    "cpu-scheduling": cpu_scheduling,   # FCFS, SJF, SRTF, Priority, RR, MLQ
+    "cpu-scheduling": cpu_scheduling,   # FCFS, SJF, SRTF, RR
     "memory-management": memory_management,  # contiguous + segmentation, fit strategies
     "paging": paging,                   # FIFO, LRU, Optimal page replacement (+ TLB)
     "deadlocks": deadlocks,             # Banker's avoidance + wait-for-graph detection
