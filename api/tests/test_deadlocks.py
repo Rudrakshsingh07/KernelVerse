@@ -107,6 +107,41 @@ class BankerEngineTests(unittest.TestCase):
         self.assertEqual(sorted(metrics["safe_sequence"]), ["P0", "P1", "P2", "P3", "P4"])
         self.assertEqual(metrics["finished_processes"], metrics["safe_sequence"])
 
+    def test_all_safe_sequences_are_enumerated(self) -> None:
+        result = deadlocks.run(classic_banker_payload()).model_dump()
+        sequences = result["metrics"]["safe_sequences"]
+        self.assertGreater(len(sequences), 1)
+        self.assertEqual(result["metrics"]["safe_sequence_count"], len(sequences))
+        self.assertFalse(result["metrics"]["safe_sequences_truncated"])
+        self.assertIn(result["metrics"]["safe_sequence"], sequences)
+        for sequence in sequences:
+            self.assertEqual(sorted(sequence), ["P0", "P1", "P2", "P3", "P4"])
+        # No ordering should be reported twice.
+        self.assertEqual(len({tuple(sequence) for sequence in sequences}), len(sequences))
+
+    def test_unsafe_state_has_no_safe_sequences(self) -> None:
+        payload = {
+            "mode": "banker",
+            "processes": ["P0", "P1"],
+            "resources": [{"id": "R", "total": 10}],
+            "allocation": {"P0": {"R": 6}, "P1": {"R": 4}},
+            "max": {"P0": {"R": 10}, "P1": {"R": 10}},
+            "available": {"R": 0},
+        }
+        metrics = deadlocks.run(payload).model_dump()["metrics"]
+        self.assertEqual(metrics["safe_sequences"], [])
+        self.assertEqual(metrics["safe_sequence_count"], 0)
+
+    def test_enumeration_caps_large_solution_spaces(self) -> None:
+        processes = [f"P{index}" for index in range(7)]
+        need = {process: {"R": 0} for process in processes}
+        alloc = {process: {"R": 0} for process in processes}
+        sequences, truncated = deadlocks._enumerate_safe_sequences(
+            processes, need, alloc, ["R"], {"R": 0}
+        )
+        self.assertTrue(truncated)
+        self.assertEqual(len(sequences), deadlocks.SAFE_SEQUENCE_LIMIT)
+
     def test_progress_steps_report_only_finished_processes(self) -> None:
         result = deadlocks.run(classic_banker_payload()).model_dump()
         first_progress = result["steps"][1]["state"]

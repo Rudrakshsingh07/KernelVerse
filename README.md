@@ -7,10 +7,11 @@ Topics in scope (build order):
 1. CPU Scheduling — FCFS, SJF, SRTF, Round Robin (with I/O blocking)
 2. Memory Management — contiguous allocation (first/best/worst fit) + segmentation, fragmentation
 3. Paging — FIFO / LRU / Optimal replacement, optional TLB
-4. Deadlocks — wait-for-graph detection, avoidance (Banker's algorithm)
-5. Disk Scheduling — FCFS, SSTF, SCAN, C-SCAN, LOOK
+4. Cache — direct-mapped and set-associative caches, FIFO / LRU / MRU / OPT replacement
+5. Deadlocks — Banker's algorithm: safe states and every possible safe sequence
+6. Disk Scheduling — FCFS, SSTF, SCAN, C-SCAN, LOOK
 
-Status: all five topics are fully runnable end-to-end (FastAPI engines + Next.js visualizers).
+Status: all six topics are fully runnable end-to-end (FastAPI engines + Next.js visualizers).
 
 ## Architecture (no Docker)
 
@@ -118,6 +119,16 @@ Unix / macOS / WSL / Git Bash:
 ```
 `start.sh` starts both servers locally (no Docker), waits for them to be ready, and prints the URLs. Logs go to `/tmp/opencode/`.
 
+To launch straight into a simulator, double-click (or run) one of the executable shortcuts:
+
+```bash
+./start-paging.sh   # opens /simulator/paging
+./start-cache.sh    # opens /simulator/cache
+```
+
+These set `KV_OPEN_PATH` and reuse `start.sh`; any other path works too, e.g.
+`KV_OPEN_PATH=/simulator/deadlocks ./start.sh`.
+
 Windows (PowerShell):
 ```powershell
 .\start.ps1
@@ -165,7 +176,7 @@ KernelVerse/
 │   │   ├── main.py           /health, /simulate routes
 │   │   └── engines/          base.py, cpu_scheduling.py,
 │   │                         memory_management.py, paging.py,
-│   │                         deadlocks.py, disk_scheduling.py
+│   │                         cache.py, deadlocks.py, disk_scheduling.py
 │   ├── tests/                engine unit tests
 │   └── requirements.txt
 ├── web/                      Next.js frontend
@@ -178,6 +189,8 @@ KernelVerse/
 ├── SKILL.md
 ├── Objectives.png
 ├── start.sh                  local (non-Docker) runner
+├── start-paging.sh           runner shortcut: open Paging
+├── start-cache.sh            runner shortcut: open Cache
 └── README.md
 ```
 

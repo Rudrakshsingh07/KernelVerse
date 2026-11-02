@@ -102,7 +102,7 @@ const PRESETS: Preset[] = [
       { id: "P2", size: 180, segmentsText: "" },
       { id: "P3", size: 90, segmentsText: "" },
     ],
-    note: "Holes already exist; watch the map as processes are placed and external fragmentation forms across all three strategies.",
+    note: "Holes already exist; watch the map as processes are placed and external fragmentation forms.",
   },
   {
     name: "Failed allocation",
@@ -214,40 +214,6 @@ function buildLayout(state: MemoryState): MemoryBlock[] {
   return layout;
 }
 
-function resultStatus(result: SimulationResult) {
-  const failed = Array.isArray(result.metrics.failed_allocations)
-    ? result.metrics.failed_allocations
-    : [];
-  const fragmentation = Number(result.metrics.external_fragmentation);
-  return {
-    failedCount: failed.length,
-    fragmentation: Number.isFinite(fragmentation) ? fragmentation : 1,
-  };
-}
-
-function findBestStrategies(results: ResultEntry[]): Set<string> {
-  const best = new Set<string>();
-  if (results.length === 0) return best;
-
-  const stats = results.map((entry) => ({
-    strategy: entry.strategy,
-    ...resultStatus(entry.result),
-  }));
-  const fewestFailures = Math.min(...stats.map((entry) => entry.failedCount));
-  const candidates = stats.filter((entry) => entry.failedCount === fewestFailures);
-  const lowestFragmentation = Math.min(
-    ...candidates.map((entry) => entry.fragmentation),
-  );
-
-  for (const entry of candidates) {
-    if (entry.fragmentation === lowestFragmentation) best.add(entry.strategy);
-  }
-
-  // If every strategy produced the same outcome, a "best" badge is meaningless.
-  if (results.length > 1 && best.size === results.length) return new Set();
-  return best;
-}
-
 function nextProcessId(rows: Proc[]): string {
   const used = new Set(rows.map((row) => row.id.trim()));
   let index = rows.length + 1;
@@ -257,9 +223,7 @@ function nextProcessId(rows: Proc[]): string {
 
 export default function MemoryManagementPage() {
   const [mode, setMode] = useState<Mode>("contiguous");
-  const [strategies, setStrategies] = useState<string[]>(
-    STRATEGIES.map((strategy) => strategy.id),
-  );
+  const [strategy, setStrategy] = useState<string>(STRATEGIES[0].id);
   const [memorySize, setMemorySize] = useState(PRESETS[0].memory_size);
   const [holes, setHoles] = useState<Hole[]>(PRESETS[0].holes);
   const [procs, setProcs] = useState<Proc[]>(PRESETS[0].procs);
@@ -278,11 +242,17 @@ export default function MemoryManagementPage() {
       if (saved.mode === "contiguous" || saved.mode === "segmentation") {
         setMode(saved.mode);
       }
-      if (Array.isArray(saved.strategies)) {
-        const known = saved.strategies.filter((id: unknown): id is string =>
-          STRATEGIES.some((strategy) => strategy.id === id),
-        );
-        if (known.length > 0) setStrategies(known);
+      const savedStrategy =
+        typeof saved.strategy === "string"
+          ? saved.strategy
+          : Array.isArray(saved.strategies)
+            ? saved.strategies[0]
+            : null;
+      if (
+        typeof savedStrategy === "string" &&
+        STRATEGIES.some((item) => item.id === savedStrategy)
+      ) {
+        setStrategy(savedStrategy);
       }
       if (Number.isInteger(saved.memorySize) && saved.memorySize > 0) {
         setMemorySize(saved.memorySize);
@@ -327,19 +297,16 @@ export default function MemoryManagementPage() {
     try {
       localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ mode, strategies, memorySize, holes, procs }),
+        JSON.stringify({ mode, strategy, memorySize, holes, procs }),
       );
     } catch {
       // Storage can be unavailable (private mode / quota); persistence is optional.
     }
-  }, [mode, strategies, memorySize, holes, procs]);
+  }, [mode, strategy, memorySize, holes, procs]);
 
   const validationErrors = useMemo(() => {
     const errors: string[] = [];
 
-    if (strategies.length === 0) {
-      errors.push("Select at least one placement strategy.");
-    }
     if (!Number.isInteger(memorySize) || memorySize < 1) {
       errors.push("Memory size must be a positive integer.");
     }
@@ -427,7 +394,7 @@ export default function MemoryManagementPage() {
     }
 
     return errors;
-  }, [holes, memorySize, mode, procs, strategies]);
+  }, [holes, memorySize, mode, procs]);
 
   const requestedUnits = useMemo(() => {
     return procs.reduce((total, proc) => {
@@ -456,33 +423,9 @@ export default function MemoryManagementPage() {
     [holes],
   );
 
-  const bestStrategies = useMemo(
-    () => findBestStrategies(results),
-    [results],
-  );
+  const activeLabel = `${labelForMode(mode)} · ${labelForStrategy(strategy)}`;
 
-  const activeLabel = `${labelForMode(mode)} · ${
-    strategies.length === 0
-      ? "No strategies"
-      : strategies.length === STRATEGIES.length
-        ? "All strategies"
-        : strategies.map(labelForStrategy).join(", ")
-  }`;
-
-  const strategySummary =
-    strategies.length === 0
-      ? "Select at least one strategy to compare placement behavior."
-      : strategies.length === STRATEGIES.length
-        ? "All strategies selected — results are compared side by side."
-        : `${strategies.length} strateg${strategies.length === 1 ? "y" : "ies"} selected — results are compared side by side.`;
-
-  function toggleStrategy(strategy: string) {
-    setStrategies((selected) =>
-      selected.includes(strategy)
-        ? selected.filter((item) => item !== strategy)
-        : [...selected, strategy],
-    );
-  }
+  const strategySummary = `${labelForStrategy(strategy)} selected — only one strategy runs at a time.`;
 
   function changeMode(nextMode: Mode) {
     if (nextMode === mode) return;
@@ -631,44 +574,38 @@ export default function MemoryManagementPage() {
           }));
 
     try {
-      const output: ResultEntry[] = [];
-      for (const strategy of strategies) {
-        const response = await fetch(`${api}/simulate`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            topic: "memory-management",
-            payload: {
-              mode,
-              strategy,
-              memory_size: memorySize,
-              holes:
-                holes.length > 0
-                  ? holes.map((hole) => ({
-                      start: hole.start,
-                      size: hole.size,
-                    }))
-                  : undefined,
-              processes,
-            },
-          }),
-        });
+      const response = await fetch(`${api}/simulate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic: "memory-management",
+          payload: {
+            mode,
+            strategy,
+            memory_size: memorySize,
+            holes:
+              holes.length > 0
+                ? holes.map((hole) => ({
+                    start: hole.start,
+                    size: hole.size,
+                  }))
+                : undefined,
+            processes,
+          },
+        }),
+      });
 
-        if (!response.ok) {
-          const detail = await response.json().catch(() => ({}));
-          const message = Array.isArray(detail.detail)
-            ? detail.detail.join(", ")
-            : detail.detail ?? response.statusText;
-          throw new Error(`${labelForStrategy(strategy)}: ${message}`);
-        }
-
-        output.push({
-          strategy,
-          result: (await response.json()) as SimulationResult,
-        });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        const message = Array.isArray(detail.detail)
+          ? detail.detail.join(", ")
+          : detail.detail ?? response.statusText;
+        throw new Error(`${labelForStrategy(strategy)}: ${message}`);
       }
 
-      setResults(output);
+      setResults([
+        { strategy, result: (await response.json()) as SimulationResult },
+      ]);
       setRunId((id) => id + 1);
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : "Request failed");
@@ -763,25 +700,25 @@ export default function MemoryManagementPage() {
 
             <div className="flex flex-col gap-1.5">
               <span className="font-mono text-[11px] uppercase tracking-wider text-on-surface-variant">
-                Placement Strategies (multi = compare)
+                Placement Strategy
               </span>
               <div className="flex flex-wrap gap-1.5">
-                {STRATEGIES.map((strategy) => {
-                  const selected = strategies.includes(strategy.id);
+                {STRATEGIES.map((item) => {
+                  const selected = strategy === item.id;
                   return (
                     <button
-                      key={strategy.id}
+                      key={item.id}
                       type="button"
-                      onClick={() => toggleStrategy(strategy.id)}
+                      onClick={() => setStrategy(item.id)}
                       aria-pressed={selected}
-                      title={strategy.desc}
+                      title={item.desc}
                       className={`px-3 py-1.5 rounded-lg font-mono text-xs transition-all ${
                         selected
                           ? "bg-surface-container-lowest text-primary shadow-[inset_2px_2px_5px_rgba(0,0,0,0.8)]"
                           : "bg-surface-container-low text-on-surface-variant neo-btn"
                       }`}
                     >
-                      {strategy.label}
+                      {item.label}
                     </button>
                   );
                 })}
@@ -845,11 +782,7 @@ export default function MemoryManagementPage() {
               className="neo-btn flex items-center justify-center gap-2 px-4 py-2.5 font-display text-sm font-semibold text-primary disabled:opacity-40"
             >
               <span className="material-symbols-outlined text-base">play_arrow</span>
-              {loading
-                ? "Running…"
-                : strategies.length > 1
-                  ? `Run ${strategies.length} Strategies`
-                  : "Run Simulation"}
+              {loading ? "Running…" : "Run Simulation"}
             </button>
           </section>
           <section className="neo-panel flex flex-col gap-4">
@@ -1112,125 +1045,17 @@ export default function MemoryManagementPage() {
             </section>
           )}
 
-          {results.length > 1 && (
-            <ComparisonTable results={results} best={bestStrategies} />
-          )}
-
-          {results.map(({ strategy, result }) => (
+          {results.map(({ strategy: resultStrategy, result }) => (
             <ResultBlock
-              key={`${strategy}-${runId}`}
-              id={`strategy-${strategy}`}
-              strategy={strategy}
+              key={`${resultStrategy}-${runId}`}
+              id={`strategy-${resultStrategy}`}
+              strategy={resultStrategy}
               result={result}
-              isBest={results.length > 1 && bestStrategies.has(strategy)}
             />
           ))}
         </main>
       </div>
     </main>
-  );
-}
-
-function ComparisonTable({
-  results,
-  best,
-}: {
-  results: ResultEntry[];
-  best: Set<string>;
-}) {
-  const rows = results
-    .map((entry) => ({ entry, ...resultStatus(entry.result) }))
-    .sort(
-      (a, b) =>
-        a.failedCount - b.failedCount || a.fragmentation - b.fragmentation,
-    );
-
-  return (
-    <section className="neo-panel flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-primary-fixed-dim text-lg">
-            leaderboard
-          </span>
-          <h2 className="font-display font-semibold tracking-tight">
-            Placement Comparison
-          </h2>
-        </div>
-        <span className="font-mono text-[10px] uppercase tracking-wider text-on-surface-variant">
-          fewer failures · lower fragmentation
-        </span>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-left font-mono text-sm">
-          <thead>
-            <tr className="text-on-surface-variant text-[11px] uppercase">
-              <th className="p-1.5 font-medium">#</th>
-              <th className="p-1.5 font-medium">Strategy</th>
-              <th className="p-1.5 font-medium text-right">Placed</th>
-              <th className="p-1.5 font-medium text-right">Failed</th>
-              <th className="p-1.5 font-medium text-right">Utilization</th>
-              <th className="p-1.5 font-medium text-right">Free</th>
-              <th className="p-1.5 font-medium text-right">Largest hole</th>
-              <th className="p-1.5 font-medium text-right">Ext. frag</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(({ entry, failedCount, fragmentation }, index) => {
-              const result = entry.result;
-              const attempts = result.steps.length - 1;
-              const isBestEntry = best.has(entry.strategy);
-
-              return (
-                <tr
-                  key={entry.strategy}
-                  className={`border-t border-surface-container-highest ${
-                    isBestEntry ? "text-primary" : "text-on-surface"
-                  }`}
-                >
-                  <td className="p-1.5 text-on-surface-variant">{index + 1}</td>
-                  <td className="p-1.5">
-                    <a
-                      href={`#strategy-${entry.strategy}`}
-                      className="uppercase hover:underline"
-                    >
-                      {labelForStrategy(entry.strategy)}
-                    </a>
-                    {isBestEntry && (
-                      <span className="ml-2 rounded bg-primary-fixed-dim/15 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-primary-fixed-dim">
-                        best
-                      </span>
-                    )}
-                  </td>
-                  <td className="p-1.5 text-right">
-                    {attempts - failedCount} / {attempts}
-                  </td>
-                  <td
-                    className={`p-1.5 text-right ${
-                      failedCount > 0 ? "text-error" : "text-on-surface-variant"
-                    }`}
-                  >
-                    {failedCount}
-                  </td>
-                  <td className="p-1.5 text-right">
-                    {formatPercent(result.metrics.memory_utilization)}
-                  </td>
-                  <td className="p-1.5 text-right">
-                    {formatUnits(result.metrics.total_free)}
-                  </td>
-                  <td className="p-1.5 text-right">
-                    {formatUnits(result.metrics.largest_free_hole)}
-                  </td>
-                  <td className="p-1.5 text-right">
-                    {formatPercent(fragmentation)}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </section>
   );
 }
 
@@ -1248,8 +1073,8 @@ function EmptyState() {
 
       <p className="max-w-2xl text-sm leading-relaxed text-on-surface-variant">
         Set a memory size, optionally describe pre-existing free holes, and build
-        a process queue. Run one strategy or compare all three to watch the map
-        split into allocated blocks, leftover holes, and external fragmentation.
+        a process queue. Pick a strategy to watch the map split into allocated
+        blocks, leftover holes, and external fragmentation.
       </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -1300,12 +1125,10 @@ function ResultBlock({
   id,
   strategy,
   result,
-  isBest,
 }: {
   id: string;
   strategy: string;
   result: SimulationResult;
-  isBest: boolean;
 }) {
   const firstState = result.steps[0]?.state as unknown as MemoryState | undefined;
   const finalState = result.steps[result.steps.length - 1]?.state as unknown as
@@ -1350,11 +1173,6 @@ function ResultBlock({
               {labelForStrategy(strategy)} —{" "}
               {resultMode === "segmentation" ? "Segment Layout" : "Memory Layout"}
             </h2>
-            {isBest && (
-              <span className="rounded bg-primary-fixed-dim/15 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-primary-fixed-dim">
-                best placement
-              </span>
-            )}
           </div>
           <p className="font-mono text-[11px] text-on-surface-variant">
             {labelForMode(resultMode)} placement · {attempts} allocation attempt

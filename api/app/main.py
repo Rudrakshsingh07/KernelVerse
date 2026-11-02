@@ -19,7 +19,7 @@ from pydantic import BaseModel
 # Import every engine module so they can be dispatched by topic name.
 # Each module must expose `validate(payload)` and `run(payload)` per the
 # SimulationEngine protocol defined in base.py.
-from .engines import cpu_scheduling, memory_management, paging, deadlocks, disk_scheduling
+from .engines import cpu_scheduling, memory_management, paging, deadlocks, disk_scheduling, cache
 from .engines.base import SimulationResult
 
 # ENGINES maps the frontend-facing "topic" string to the corresponding
@@ -29,6 +29,7 @@ ENGINES = {
     "cpu-scheduling": cpu_scheduling,   # FCFS, SJF, SRTF, RR
     "memory-management": memory_management,  # contiguous + segmentation, fit strategies
     "paging": paging,                   # FIFO, LRU, Optimal page replacement (+ TLB)
+    "cache": cache,                     # FIFO / LRU / MRU / OPT set-associative cache
     "deadlocks": deadlocks,             # Banker's avoidance + wait-for-graph detection
     "disk-scheduling": disk_scheduling, # FCFS, SSTF, SCAN, C-SCAN, LOOK
 }

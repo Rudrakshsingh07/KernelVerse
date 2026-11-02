@@ -48,6 +48,22 @@ echo "  App: http://127.0.0.1:3000"
 echo "  API: http://127.0.0.1:8000  (docs at /docs)"
 echo ""
 echo "Logs: /tmp/opencode/api.log  /tmp/opencode/web.log"
+
+APP_PATH="${KV_OPEN_PATH:-}"
+if [[ -n "$APP_PATH" ]]; then
+  APP_URL="http://127.0.0.1:3000${APP_PATH}"
+  echo "Opening $APP_URL …"
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$APP_URL" >/dev/null 2>&1 &
+  elif command -v open >/dev/null 2>&1; then
+    open "$APP_URL" >/dev/null 2>&1 &
+  elif command -v wslview >/dev/null 2>&1; then
+    wslview "$APP_URL" >/dev/null 2>&1 &
+  else
+    echo "No browser opener found; open $APP_URL manually."
+  fi
+fi
+
 echo "Press Ctrl+C to stop."
 
 wait

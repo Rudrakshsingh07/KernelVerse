@@ -15,6 +15,12 @@ The engine records one Step per head movement so the frontend can animate the
 head position and the sequence of served requests.  It produces total seek
 distance, average seek, head movement count, and the full head path.
 
+The engine also chooses the initial sweep direction itself (there is no
+direction input): FCFS starts toward the first queued request, while SSTF and
+the directional algorithms start toward the nearest pending request.  This
+keeps every trace deterministic and lets the UI stay free of a direction
+selector.
+
 State contract used by the web UI (in ``Step.state``):
     algorithm, head, direction, disk_size, requests, remaining, served,
     sequence, seek_distances, total_seek, total_requests, last_served,
@@ -46,11 +52,12 @@ def validate(payload: dict[str, Any]) -> list[str]:
     """
     Validate the disk-scheduling input payload.
 
-    Checks algorithm name, initial head position, disk size, request list, and
-    direction (required for SCAN/C-SCAN/LOOK).
+    Checks algorithm name, initial head position, disk size, and request list.
+    The sweep direction is chosen by the engine, so any legacy ``direction``
+    field in the payload is ignored rather than validated.
 
     Args:
-        payload: JSON dict with algorithm, head, disk_size, requests, direction.
+        payload: JSON dict with algorithm, head, disk_size, and requests.
 
     Returns:
         List of human-readable error strings; empty list means valid.
@@ -82,10 +89,42 @@ def validate(payload: dict[str, Any]) -> list[str]:
                     f"requests[{i}] ({request}) must be less than disk_size ({disk_size})"
                 )
 
-    direction = payload.get("direction", "right")
-    if algorithm in DIRECTIONAL_ALGORITHMS and direction not in ("left", "right"):
-        errors.append("direction must be 'left' or 'right'")
     return errors
+
+
+def _choose_initial_direction(
+    algorithm: str, head: int, requests: list[int]
+) -> str:
+    """
+    Choose the initial head direction from the workload.
+
+    The UI has no direction selector, so the engine decides which way to
+    start.  FCFS starts toward the first request it will serve; SSTF, SCAN,
+    C-SCAN, and LOOK start toward the nearest pending request.  Ties go to the
+    lower cylinder, matching SSTF's tie-break.  Requests already under the
+    head are skipped because they produce a zero-distance service and do not
+    indicate a travel direction.
+
+    Args:
+        algorithm: One of ``ALGORITHMS``.
+        head: Initial head position.
+        requests: Pending cylinder requests.
+
+    Returns:
+        ``"left"`` or ``"right"``.  Defaults to ``"right"`` when every request
+        is already at the head (there is no movement to direct).
+    """
+    if algorithm == "fcfs":
+        for request in requests:
+            if request != head:
+                return "right" if request > head else "left"
+        return "right"
+
+    candidates = [request for request in requests if request != head]
+    if not candidates:
+        return "right"
+    nearest = min(candidates, key=lambda request: (abs(request - head), request))
+    return "right" if nearest > head else "left"
 
 
 def run(payload: dict[str, Any]) -> SimulationResult:
@@ -98,7 +137,8 @@ def run(payload: dict[str, Any]) -> SimulationResult:
     and wrap movements so the seek-time calculation includes the full sweep.
 
     Args:
-        payload: Validated input with algorithm, head, disk_size, requests, direction.
+        payload: Validated input with algorithm, head, disk_size, and requests.
+            A legacy ``direction`` field is ignored; the engine chooses it.
 
     Returns:
         SimulationResult with steps, metrics, and warnings.
@@ -108,11 +148,10 @@ def run(payload: dict[str, Any]) -> SimulationResult:
     disk_size = int(payload["disk_size"])
     requests = [int(r) for r in payload["requests"]]
 
-    # FCFS and SSTF do not conceptually use a direction.  Keep "right" as the
-    # default so every Step has a consistent shape for the UI.
-    initial_direction = payload.get("direction", "right")
-    if initial_direction not in ("left", "right"):
-        initial_direction = "right"
+    # The engine owns the sweep direction: it is derived from the workload
+    # instead of being accepted from the client.  This keeps the algorithm
+    # self-contained and removes the need for a direction selector in the UI.
+    initial_direction = _choose_initial_direction(algorithm, head_start, requests)
 
     steps: list[Step] = []
     warnings: list[str] = []
@@ -484,6 +523,10 @@ def run(payload: dict[str, Any]) -> SimulationResult:
         "request_count": len(requests),
         "initial_head": head_start,
         "initial_direction": initial_direction,
+        "direction_source": "engine",
+        "direction_reason": (
+            "first queued request" if algorithm == "fcfs" else "nearest pending request"
+        ),
         "disk_size": disk_size,
         "sequence": sequence,
         "seek_distances": seek_distances,

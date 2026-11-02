@@ -7,7 +7,7 @@ export default function Home() {
       <h1 className="font-display text-5xl font-semibold tracking-tight">KernelVerse</h1>
       <p className="max-w-xl text-on-surface-variant">
         An interactive OS concepts laboratory — CPU scheduling, memory management, paging,
-        disk scheduling, and deadlocks, visualized step by step.
+        cache, disk scheduling, and deadlocks, visualized step by step.
       </p>
       <Link href="/simulator" className="neo-btn px-8 py-3 font-display font-semibold text-primary">
         Open Simulators

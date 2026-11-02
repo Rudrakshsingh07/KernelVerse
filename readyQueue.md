@@ -12,14 +12,17 @@
 
 | Area | Current state | What remains |
 |------|--------------|--------------|
-| CPU Scheduling | ✅ Complete (engine + visualizer + compare view) | Nothing |
+| CPU Scheduling | ✅ Complete (engine + visualizer) | Nothing (comparison view deferred to v2) |
 | Memory Management | ✅ Complete (engine + visualizer) | Nothing |
 | Paging | ✅ Complete (engine + visualizer + TLB) | Nothing |
+| Cache | ✅ Complete (set-associative engine + visualizer) | Nothing |
 | Deadlocks | ✅ Complete (engine + visualizer) | Nothing (prevention techniques are future scope) |
-| Disk Scheduling | ✅ Complete (engine + visualizer + comparison view) | Nothing |
-| Testing | ⚠️ Disk Scheduling engine tests added; other engines still untested | Engine tests, API contract tests |
+| Disk Scheduling | ✅ Complete (engine + visualizer; engine selects the sweep direction) | Nothing (comparison view deferred to v2) |
+| Testing | ⚠️ Cache + Deadlocks + Disk Scheduling engine tests added; CPU, Memory, and Paging still untested | Engine tests, API contract tests |
 | Docker | ❌ Removed in last commit | Optional re-add (docker-compose + Dockerfiles) |
 | Release hardening | ⚠️ Planned in ADR M5 | SEO pass, glossary, presets, CORS hardening, public-release checklist |
+
+> **v2 scope:** multi-algorithm comparison views for CPU Scheduling and Disk Scheduling are deferred to v2 and are not part of the current release.
 
 The shared foundation (`base.py` engine contract, `SimulationPlayer`, `types.ts`, `gantt.ts`, localStorage persistence) is already done, so new topics only need: **one Python engine module → one Next.js visualizer page**.
 
@@ -40,14 +43,14 @@ The shared foundation (`base.py` engine contract, `SimulationPlayer`, `types.ts`
 | ID | Task | Layer | Depends On | Definition of Done | Status |
 |----|------|-------|------------|-------------------|--------|
 | F1 | Deadlocks page: `web/src/app/simulator/deadlocks/page.tsx` | frontend | B1, B3 | Replaces stub; inputs for resources/allocation/max/need or requests; step-through visualization (resource allocation graph or state table); metrics (safe sequence / deadlock cycle); localStorage persistence; error handling for 422/501 | done |
-| F2 | Disk Scheduling page: `web/src/app/simulator/disk-scheduling/page.tsx` | frontend | B2, B3 | Replaces stub; inputs for request queue + head position + direction; step-through head movement visualization (track/seek plot); metrics (total seek time, avg seek); localStorage persistence; error handling | done |
+| F2 | Disk Scheduling page: `web/src/app/simulator/disk-scheduling/page.tsx` | frontend | B2, B3 | Replaces stub; inputs for request queue + head position (the engine selects the sweep direction); step-through head movement visualization (track/seek plot); metrics (total seek time, avg seek); localStorage persistence; error handling | done |
 | F3 | Simulator index: add Deadlocks + Disk Scheduling to `web/src/app/simulator/page.tsx` TOPICS | frontend | F1, F2 | Status badge flips from "Planned" to "Complete"; route links work | done |
 
 ### Phase 3: Comparison / quiz / hardening (depend on all engines)
 
 | ID | Task | Layer | Depends On | Definition of Done | Status |
 |----|------|-------|------------|-------------------|--------|
-| P1 | Unit tests for all engines (CPU, Memory, Paging, Deadlocks, Disk) | project | B1, B2 | `pytest` suite under `api/tests/`; covers happy path, edge cases, invalid input validation | todo |
+| P1 | Unit tests for all engines (Cache + Deadlocks + Disk done; CPU, Memory, Paging remaining) | project | B1, B2 | `pytest` suite under `api/tests/`; covers happy path, edge cases, invalid input validation | in-progress |
 | P2 | API contract tests (`/simulate`, `/health`) | project | B1, B3 | Tests that unknown topics return 501, invalid payloads return 422, all five topics return valid `SimulationResult` | todo |
 | P3 | CORS hardening: restrict `allow_origins` in `api/app/main.py` | backend | B3 | Production-ready CORS config (no `*` in production); documented env var | todo |
 | P4 | SEO pass: per-topic title/meta, OG tags, sitemap/robots groundwork | project | F3 | ADR M5 SEO items addressed | todo |

@@ -370,8 +370,9 @@ export default function DiskSchedulingPage() {
               </div>
             </div>
             <p className="font-mono text-[10px] leading-relaxed text-on-surface-variant">
-              Seek distance = |next cylinder − current cylinder|. SCAN and C-SCAN include travel
-              to the disk edge; LOOK turns around at the last request.
+              Seek distance = |next cylinder − current cylinder|. The engine chooses the sweep
+              direction from the nearest pending request. SCAN and C-SCAN include travel to the
+              disk edge; LOOK turns around at the last request.
             </p>
           </section>
         </aside>
@@ -479,8 +480,14 @@ function ResultBlock({
           <span className="neo-inset-sm px-3 py-1.5 text-on-surface-variant">
             start <strong className="text-on-surface">{String(result.metrics.initial_head)}</strong>
           </span>
-          <span className="neo-inset-sm px-3 py-1.5 text-on-surface-variant">
+          <span
+            className="neo-inset-sm px-3 py-1.5 text-on-surface-variant"
+            title="Chosen by the engine from the nearest pending request"
+          >
             direction <strong className="text-primary-fixed-dim uppercase">{initialDirection}</strong>
+            <span className="ml-1.5 rounded bg-primary-fixed-dim/10 px-1 py-0.5 font-mono text-[9px] uppercase tracking-wider text-primary-fixed-dim">
+              auto
+            </span>
           </span>
           <span className="neo-inset-sm px-3 py-1.5 text-on-surface-variant">
             head <strong className="text-primary">{state?.head ?? "—"}</strong>
@@ -575,7 +582,10 @@ function DiskStateView({ step, fullSequence }: { step: Step; fullSequence: numbe
         <span className="neo-inset-sm px-2.5 py-1 text-on-surface-variant">
           HEAD <strong className="text-primary text-sm">{state.head}</strong>
         </span>
-        <span className="neo-inset-sm px-2.5 py-1 text-on-surface-variant">
+        <span
+          className="neo-inset-sm px-2.5 py-1 text-on-surface-variant"
+          title="The engine chooses the sweep direction from the workload"
+        >
           DIR <strong className="text-primary-fixed-dim uppercase">{state.direction}</strong>
         </span>
         <span className="neo-inset-sm px-2.5 py-1 text-on-surface-variant uppercase">

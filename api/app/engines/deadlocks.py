@@ -28,6 +28,11 @@ from .base import SimulationResult, Step
 
 MODES = ["banker", "detection"]
 
+# Enumerating every safe sequence is combinatorial.  The engine returns at
+# most this many complete sequences and flags the result as truncated if the
+# state has more.  This keeps the response bounded for large process counts.
+SAFE_SEQUENCE_LIMIT = 1000
+
 
 def validate(payload: dict[str, Any]) -> list[str]:
     """
@@ -139,6 +144,69 @@ def validate(payload: dict[str, Any]) -> list[str]:
                     f"available['{rname}'] plus total allocated exceeds total instances ({total_map[rname]})"
                 )
     return errors
+
+
+def _enumerate_safe_sequences(
+    processes: list[str],
+    need: dict[str, dict[str, int]],
+    alloc: dict[str, dict[str, int]],
+    resources: list[str],
+    initial_work: dict[str, int],
+    limit: int = SAFE_SEQUENCE_LIMIT,
+) -> tuple[list[list[str]], bool]:
+    """
+    Enumerate every ordering in which all processes can finish.
+
+    The standard safety algorithm stops at the first safe sequence it finds.
+    Teaching the concept is clearer when the UI can show *all* valid
+    orderings, so this helper performs a backtracking search over the same
+    Need <= Work rule.
+
+    Args:
+        processes: Process IDs in input order.
+        need: Remaining need matrix (Max - Allocation).
+        alloc: Current allocation matrix; released back to Work on finish.
+        resources: Resource IDs in column order.
+        initial_work: Starting Work vector (currently available instances).
+        limit: Safety cap on the number of sequences retained.
+
+    Returns:
+        ``(sequences, truncated)`` where ``truncated`` is True when the
+        search hit ``limit`` and stopped early.
+    """
+    sequences: list[list[str]] = []
+    truncated = False
+
+    def search(work: dict[str, int], remaining: list[str], path: list[str]) -> None:
+        nonlocal truncated
+        if truncated:
+            return
+        if not remaining:
+            # Keep collecting one extra sequence so ``truncated`` means the
+            # state genuinely has more than ``limit`` solutions.
+            sequences.append(list(path))
+            if len(sequences) > limit:
+                truncated = True
+            return
+
+        for process in remaining:
+            if all(need[process][resource] <= work[resource] for resource in resources):
+                next_work = {
+                    resource: work[resource] + alloc[process][resource]
+                    for resource in resources
+                }
+                path.append(process)
+                search(
+                    next_work,
+                    [candidate for candidate in remaining if candidate != process],
+                    path,
+                )
+                path.pop()
+                if truncated:
+                    return
+
+    search(dict(initial_work), list(processes), [])
+    return sequences[:limit], truncated
 
 
 def run(payload: dict[str, Any]) -> SimulationResult:
@@ -254,6 +322,12 @@ def run(payload: dict[str, Any]) -> SimulationResult:
     # MODE: Banker's safety algorithm (deadlock avoidance)
     # ==================================================================
     if mode == "banker":
+        # Enumerate the full solution space up front (bounded), while the
+        # trace below follows the standard first-runnable-process path.
+        all_safe_sequences, sequences_truncated = _enumerate_safe_sequences(
+            processes, need, alloc, rid_list, initial_available
+        )
+
         finish: dict[str, bool] = {p: False for p in processes}
         safe_sequence: list[str] = []
         can_proceed = True
@@ -317,6 +391,9 @@ def run(payload: dict[str, Any]) -> SimulationResult:
             metrics = {
                 "safe": True,
                 "safe_sequence": safe_sequence,
+                "safe_sequences": all_safe_sequences,
+                "safe_sequence_count": len(all_safe_sequences),
+                "safe_sequences_truncated": sequences_truncated,
                 "deadlock": False,
                 "unfinished_processes": [],
                 "finished_processes": list(safe_sequence),
@@ -350,6 +427,9 @@ def run(payload: dict[str, Any]) -> SimulationResult:
             metrics = {
                 "safe": False,
                 "safe_sequence": safe_sequence,
+                "safe_sequences": all_safe_sequences,
+                "safe_sequence_count": len(all_safe_sequences),
+                "safe_sequences_truncated": sequences_truncated,
                 "deadlock": True,
                 "unfinished_processes": unfinished,
                 "finished_processes": [p for p in processes if finish[p]],

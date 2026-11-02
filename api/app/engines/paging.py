@@ -118,7 +118,7 @@ def run(payload: dict[str, Any]) -> SimulationResult:
             steps.append(
                 _step(
                     i, page, frames, tlb, True, True, False,
-                    faults, tlb_hits, tlb_misses, frame_hits, note, refs,
+                    faults, tlb_hits, tlb_misses, frame_hits, note,
                 )
             )
             continue
@@ -136,7 +136,7 @@ def run(payload: dict[str, Any]) -> SimulationResult:
             steps.append(
                 _step(
                     i, page, frames, tlb, True, tlb_hit, False,
-                    faults, tlb_hits, tlb_misses, frame_hits, note, refs,
+                    faults, tlb_hits, tlb_misses, frame_hits, note,
                 )
             )
             continue
@@ -166,7 +166,7 @@ def run(payload: dict[str, Any]) -> SimulationResult:
         steps.append(
             _step(
                 i, page, frames, tlb, False, tlb_hit, True,
-                faults, tlb_hits, tlb_misses, frame_hits, note, refs,
+                faults, tlb_hits, tlb_misses, frame_hits, note,
             )
         )
 
@@ -248,7 +248,7 @@ def _victim(
 
 def _step(
     i, page, frames, tlb, hit, tlb_hit, fault, faults, tlb_hits, tlb_misses,
-    frame_hits, note, refs,
+    frame_hits, note,
 ) -> Step:
     """
     Build a ``Step`` for a single page reference.
@@ -270,17 +270,16 @@ def _step(
         tlb_misses: Running TLB-miss count.
         frame_hits: Running frame-hit count.
         note: Explanation string for this step.
-        refs: The full reference string (included in state for context).
 
     Returns:
-        A populated ``Step`` object.
+        A populated ``Step`` object.  Only the page being requested is stored,
+        not the full reference string, keeping every step compact.
     """
     return Step(
         tick=i,
         state={
             "reference_index": i,
             "current": page,
-            "references": refs,
             "frames": list(frames),
             "tlb": list(tlb),
             "hit": hit,

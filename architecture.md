@@ -36,6 +36,8 @@ The backend is a FastAPI application. Each OS topic has its own Python engine mo
 api/
 ├── requirements.txt                  # Python dependencies: fastapi, uvicorn, pydantic
 ├── tests/                            # backend unit tests
+│   ├── test_cache.py                 # set-associative cache engine tests
+│   ├── test_deadlocks.py             # deadlock detection + Banker's algorithm tests
 │   └── test_disk_scheduling.py       # disk-scheduling engine regression tests
 ├── app/                              # FastAPI application package
 │   ├── __init__.py                   # marks app/ as a Python package
@@ -46,6 +48,7 @@ api/
 │       ├── cpu_scheduling.py         # FCFS, SJF, SRTF, Round Robin (+ I/O blocking)
 │       ├── memory_management.py      # contiguous allocation & segmentation; first/best/worst-fit strategies
 │       ├── paging.py                 # FIFO, LRU, Optimal page replacement + optional TLB simulation
+│       ├── cache.py                  # direct-mapped / set-associative cache with FIFO, LRU, MRU or OPT replacement
 │       ├── deadlocks.py              # Banker's safety algorithm + wait-for-graph deadlock detection
 │       └── disk_scheduling.py        # FCFS, SSTF, SCAN, C-SCAN, LOOK disk head scheduling
 ```
@@ -57,8 +60,9 @@ api/
 | `cpu_scheduling.py` | FCFS, SJF, SRTF, Round Robin |
 | `memory_management.py` | Contiguous allocation, segmentation, first/best/worst-fit |
 | `paging.py` | FIFO, LRU, Optimal page replacement, TLB hits/misses |
-| `deadlocks.py` | Banker's avoidance, wait-for-graph detection |
-| `disk_scheduling.py` | FCFS, SSTF, SCAN, C-SCAN, LOOK |
+| `cache.py` | Direct-mapped / set-associative cache, FIFO / LRU / MRU / OPT replacement, hits/misses/evictions |
+| `deadlocks.py` | Banker's avoidance (all safe sequences), wait-for-graph detection |
+| `disk_scheduling.py` | FCFS, SSTF, SCAN, C-SCAN, LOOK (engine-selected sweep direction) |
 
 ---
 
@@ -106,10 +110,11 @@ web/
 │   │       ├── cpu-scheduling/page.tsx   # CPU scheduling simulator UI
 │   │       ├── memory-management/page.tsx# memory management simulator UI
 │   │       ├── paging/page.tsx               # paging simulator UI
+│   │       ├── cache/page.tsx                # set-associative cache simulator UI
 │   │       ├── disk-scheduling/page.tsx    # disk scheduling simulator UI
 │   │       └── deadlocks/page.tsx          # deadlocks simulator UI
 │   ├── components/                   # shared React components
-│   │   └── SimulationPlayer.tsx      # shared play/pause, step, scrubber, speed, loop controls
+│   │   └── SimulationPlayer.tsx      # shared retractable player: play/pause, step, scrubber, speed, loop
 │   └── lib/                          # shared frontend utilities
 │       ├── gantt.ts                  # Gantt chart segment extraction + PID color palette
 │       └── types.ts                  # shared TypeScript interfaces (Step, SimulationResult)
