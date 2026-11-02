@@ -9,33 +9,95 @@ interface Row {
   id: string;
   arrival: number;
   burst: number;
-  priority: number;
-  queue: number;
   io_arrival: number;
   io_duration: number;
+}
+
+interface ProcessMetrics {
+  id: string;
+  waiting: number;
+  turnaround: number | null;
+  response: number | null;
+  started_at: number | null;
+  finished_at: number | null;
+}
+
+interface RunResult {
+  algorithm: string;
+  result: SimulationResult;
 }
 
 const ALGS = [
   { id: "fcfs", label: "FCFS" },
   { id: "sjf", label: "SJF" },
   { id: "srtf", label: "SRTF" },
-  { id: "priority", label: "Priority" },
   { id: "rr", label: "Round Robin" },
 ] as const;
 
+const QUANTUM_ALGORITHMS = new Set<string>(["rr"]);
+
 const DEFAULT_ROWS: Row[] = [
-  { id: "P1", arrival: 0, burst: 5, priority: 1, queue: 0, io_arrival: 0, io_duration: 0 },
-  { id: "P2", arrival: 1, burst: 3, priority: 2, queue: 0, io_arrival: 0, io_duration: 0 },
-  { id: "P3", arrival: 2, burst: 1, priority: 3, queue: 0, io_arrival: 0, io_duration: 0 },
+  { id: "P1", arrival: 0, burst: 5, io_arrival: 0, io_duration: 0 },
+  { id: "P2", arrival: 1, burst: 3, io_arrival: 0, io_duration: 0 },
+  { id: "P3", arrival: 2, burst: 1, io_arrival: 0, io_duration: 0 },
 ];
 
 const STORAGE_KEY = "kv:cpu-scheduling";
+
+/**
+ * Arrival times must strictly increase down the process list: P1 arrives
+ * before P2, P2 before P3, and so on.  Restored/older workloads are repaired
+ * here so the table can never hold a P2 that arrives before P1.
+ */
+function normalizeArrivals(rows: Row[]): Row[] {
+  let previousArrival: number | null = null;
+  return rows.map((row) => {
+    const requested = Math.max(0, Number(row.arrival) || 0);
+    const arrival = previousArrival === null ? requested : Math.max(requested, previousArrival + 1);
+    previousArrival = arrival;
+    return arrival === row.arrival ? row : { ...row, arrival };
+  });
+}
+
+/** Index the engine's per-process results by process ID. */
+function buildProcessMetrics(result: SimulationResult | null): Map<string, ProcessMetrics> {
+  const metrics = new Map<string, ProcessMetrics>();
+  const perProcess = result?.metrics.per_process;
+  if (!Array.isArray(perProcess)) return metrics;
+
+  for (const item of perProcess) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    if (typeof record.id !== "string") continue;
+    metrics.set(record.id, {
+      id: record.id,
+      waiting: typeof record.waiting === "number" ? record.waiting : 0,
+      turnaround: typeof record.turnaround === "number" ? record.turnaround : null,
+      response: typeof record.response === "number" ? record.response : null,
+      started_at: typeof record.started_at === "number" ? record.started_at : null,
+      finished_at: typeof record.finished_at === "number" ? record.finished_at : null,
+    });
+  }
+  return metrics;
+}
+
+function formatMetric(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "string" && value.length > 0) return value;
+  return "—";
+}
+
+function formatAverage(value: unknown): string {
+  const formatted = formatMetric(value);
+  return formatted === "—" ? formatted : `${formatted} ms`;
+}
 
 export default function CPUSchedulingPage() {
   const [rows, setRows] = useState<Row[]>(DEFAULT_ROWS);
   const [algorithm, setAlgorithm] = useState<string>("rr");
   const [quantum, setQuantum] = useState(2);
-  const [results, setResults] = useState<{ algorithm: string; result: SimulationResult }[]>([]);
+  const [ioEnabled, setIoEnabled] = useState(false);
+  const [run, setRun] = useState<RunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -44,37 +106,64 @@ export default function CPUSchedulingPage() {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const saved = JSON.parse(raw);
-        if (saved.rows) setRows(saved.rows);
-        if (saved.algorithm) setAlgorithm(saved.algorithm);
+        if (Array.isArray(saved.rows)) setRows(normalizeArrivals(saved.rows));
+        // Ignore algorithms that are no longer offered (e.g. the removed
+        // Priority scheduler) instead of leaving no algorithm selected.
+        if (ALGS.some((item) => item.id === saved.algorithm)) setAlgorithm(saved.algorithm);
         if (saved.quantum) setQuantum(saved.quantum);
+        if (typeof saved.ioEnabled === "boolean") {
+          setIoEnabled(saved.ioEnabled);
+        } else if (Array.isArray(saved.rows)) {
+          // Older saves always showed the I/O columns; keep them visible if the
+          // saved workload actually used I/O.
+          setIoEnabled(saved.rows.some((row: Row) => Number(row.io_duration) > 0));
+        }
       }
     } catch {}
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ rows, algorithm, quantum }));
-  }, [rows, algorithm, quantum]);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ rows, algorithm, quantum, ioEnabled }));
+  }, [rows, algorithm, quantum, ioEnabled]);
+
+  const usesQuantum = QUANTUM_ALGORITHMS.has(algorithm);
+  const activeLabel = ALGS.find((a) => algorithm === a.id)?.label ?? "—";
+  const processMetrics = buildProcessMetrics(run?.result ?? null);
+
+  function clearRun() {
+    setRun(null);
+    setError(null);
+  }
 
   async function runAll() {
     setLoading(true);
     setError(null);
-    setResults([]);
+    setRun(null);
     const api = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
     try {
-      const out: { algorithm: string; result: SimulationResult }[] = [];
-      for (const alg of [algorithm]) {
-        const res = await fetch(`${api}/simulate`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ topic: "cpu-scheduling", payload: { algorithm: alg, quantum, processes: rows } }),
-        });
-        if (!res.ok) {
-          const detail = await res.json().catch(() => ({}));
-          throw new Error(Array.isArray(detail.detail) ? detail.detail.join(", ") : detail.detail ?? res.statusText);
-        }
-        out.push({ algorithm: alg, result: await res.json() });
+      const payload: Record<string, unknown> = {
+        algorithm,
+        processes: rows.map((row) => ({
+          id: row.id,
+          arrival: row.arrival,
+          burst: row.burst,
+          // Hidden I/O values must not leak into a run when the feature is off.
+          io_arrival: ioEnabled ? row.io_arrival : 0,
+          io_duration: ioEnabled ? row.io_duration : 0,
+        })),
+      };
+      if (usesQuantum) payload.quantum = quantum;
+
+      const res = await fetch(`${api}/simulate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic: "cpu-scheduling", payload }),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(Array.isArray(detail.detail) ? detail.detail.join(", ") : detail.detail ?? res.statusText);
       }
-      setResults(out);
+      setRun({ algorithm, result: (await res.json()) as SimulationResult });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Request failed");
     } finally {
@@ -82,11 +171,28 @@ export default function CPUSchedulingPage() {
     }
   }
 
-  function updateRow(i: number, key: keyof Row, value: string) {
-    setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, [key]: key === "id" ? value : Number(value) } : r)));
+  function updateArrival(index: number, value: string) {
+    clearRun();
+    setRows((current) => {
+      // A process can never arrive before the one above it.  Raising an
+      // earlier arrival also pushes every later process forward so the whole
+      // column stays strictly ascending.
+      const lowerBound = index === 0 ? 0 : current[index - 1].arrival + 1;
+      const requested = Number(value);
+      const arrival = Math.max(lowerBound, Number.isFinite(requested) ? Math.floor(requested) : lowerBound);
+      const updated = current.map((row, idx) => (idx === index ? { ...row, arrival } : row));
+      return normalizeArrivals(updated);
+    });
   }
 
-  const activeLabel = ALGS.filter((a) => algorithm === a.id).map((a) => a.label).join(", ");
+  function updateRow(i: number, key: keyof Row, value: string) {
+    if (key === "arrival") {
+      updateArrival(i, value);
+      return;
+    }
+    clearRun();
+    setRows((rs) => rs.map((r, idx) => (idx === i ? { ...r, [key]: key === "id" ? value : Number(value) } : r)));
+  }
 
   return (
     <main className="flex flex-col gap-6">
@@ -99,140 +205,194 @@ export default function CPUSchedulingPage() {
             <span className="text-on-surface-variant">/</span>
             <span className="font-display text-sm text-primary font-medium">CPU Scheduling</span>
             <span className="material-symbols-outlined text-outline text-sm">chevron_right</span>
-            <span className="font-mono text-xs text-primary-fixed font-semibold">{activeLabel || "—"}{algorithm === "rr" ? ` (q=${quantum}ms)` : ""}</span>
+            <span className="font-mono text-xs text-primary-fixed font-semibold">{activeLabel}{usesQuantum ? ` (q=${quantum}ms)` : ""}</span>
           </div>
         </div>
-        <button onClick={runAll} disabled={loading || false} className="neo-btn px-6 py-2.5 font-display font-semibold text-primary disabled:opacity-40">
+        <button onClick={runAll} disabled={loading} className="neo-btn px-6 py-2.5 font-display font-semibold text-primary disabled:opacity-40">
           {loading ? "Running…" : "▶ Run Simulation"}
         </button>
       </header>
 
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
-        {/* LEFT: Parameters + Process table */}
-        <aside className="xl:col-span-4 flex flex-col gap-6">
-          <section className="neo-panel flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-primary-fixed-dim text-lg">tune</span>
-                <h2 className="font-display font-semibold tracking-tight">Parameters</h2>
-              </div>
-              <span className="px-2 py-0.5 rounded font-mono text-[11px] bg-surface-container-lowest text-on-surface-variant shadow-[inset_1px_1px_3px_rgba(0,0,0,0.7)]">[DISPATCHER]</span>
+      {error && <p className="text-sm text-error px-1" role="alert">{error}</p>}
+
+      {/* Workload table: the dominant surface of the page. */}
+      <section className="neo-panel flex h-[calc(80vh-6rem)] min-h-[560px] flex-col gap-4 overflow-hidden">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-primary-fixed-dim text-lg">table_chart</span>
+              <h2 className="font-display font-semibold tracking-tight">Process Workload</h2>
+              <span className="px-2 py-0.5 rounded font-mono text-[11px] bg-surface-container-lowest text-on-surface-variant shadow-[inset_1px_1px_3px_rgba(0,0,0,0.7)]">{rows.length} processes</span>
+            </div>
+            <p className="font-mono text-[10px] leading-relaxed text-on-surface-variant">
+              Edit any cell directly. Arrival times stay strictly ascending from P1 → Pn.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => {
+              clearRun();
+              setRows((current) => {
+                const lastArrival = current[current.length - 1]?.arrival ?? -1;
+                return [...current, { id: `P${current.length + 1}`, arrival: lastArrival + 1, burst: 2, io_arrival: 0, io_duration: 0 }];
+              });
+            }} className="neo-btn flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium hover:text-primary">
+              <span className="material-symbols-outlined text-base">add_circle</span>Add Process
+            </button>
+            <button onClick={() => {
+              clearRun();
+              setRows((current) => {
+                let previousArrival = -1;
+                return current.map((r) => {
+                  const arrival = previousArrival + 1 + Math.floor(Math.random() * 2);
+                  previousArrival = arrival;
+                  const burst = 1 + Math.floor(Math.random() * 8);
+                  return {
+                    ...r,
+                    arrival,
+                    burst,
+                    io_arrival: ioEnabled ? Math.floor(Math.random() * burst) : 0,
+                    io_duration: ioEnabled ? Math.floor(Math.random() * 4) : 0,
+                  };
+                });
+              });
+            }} className="neo-btn flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium hover:text-secondary">
+              <span className="material-symbols-outlined text-base">shuffle</span>Randomize
+            </button>
+          </div>
+        </div>
+
+        {/* Scheduling controls */}
+        <div className="flex flex-wrap items-center gap-3 rounded-lg bg-surface-container-low px-3 py-2.5">
+          <span className="font-mono text-[11px] uppercase tracking-wider text-on-surface-variant">Algorithm</span>
+          <div className="flex flex-wrap gap-1.5">
+            {ALGS.map((a) => {
+              const on = algorithm === a.id;
+              return (
+                <button key={a.id} onClick={() => {
+                  if (a.id === algorithm) return;
+                  setAlgorithm(a.id);
+                  clearRun();
+                }} aria-pressed={on}
+                  className={`px-3 py-1.5 rounded-lg font-mono text-xs transition-all ${on ? "bg-surface-container-lowest text-primary shadow-[inset_2px_2px_5px_rgba(0,0,0,0.8)]" : "bg-surface-container-low text-on-surface-variant neo-btn"}`}>
+                  {a.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="ml-auto flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[11px] uppercase tracking-wider text-on-surface-variant">I/O Complexity</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={ioEnabled}
+                aria-label="Toggle I/O complexity"
+                onClick={() => {
+                  setIoEnabled((value) => !value);
+                  clearRun();
+                }}
+                className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${ioEnabled ? "bg-primary-container" : "bg-surface-container-high shadow-[inset_2px_2px_5px_rgba(0,0,0,0.8)]"}`}
+              >
+                <span className={`absolute top-1 h-4 w-4 rounded-full transition-all ${ioEnabled ? "left-6 bg-[#0c0e12]" : "left-1 bg-outline"}`} />
+              </button>
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <label className="font-mono text-[11px] uppercase tracking-wider text-on-surface-variant">Scheduling Algorithms (multi = compare)</label>
-              <div className="flex flex-wrap gap-1.5">
-                {ALGS.map((a) => {
-                  const on = algorithm === a.id;
-                  return (
-                    <button key={a.id} onClick={() => setAlgorithm(a.id)}
-                      className={`px-3 py-1.5 rounded-lg font-mono text-xs transition-all ${on ? "bg-surface-container-lowest text-primary shadow-[inset_2px_2px_5px_rgba(0,0,0,0.8)]" : "bg-surface-container-low text-on-surface-variant neo-btn"}`}>
-                      {a.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            {usesQuantum && (
+              <label className="flex items-center gap-2">
+                <span className="font-mono text-[11px] uppercase tracking-wider text-on-surface-variant">Quantum</span>
+                <input type="range" min={1} max={10} value={quantum} onChange={(e) => {
+                  setQuantum(Number(e.target.value));
+                  clearRun();
+                }} className="w-28 accent-primary-container" />
+                <span className="font-mono text-sm text-primary font-bold">{quantum} ms</span>
+              </label>
+            )}
+          </div>
+        </div>
 
-            <div className="flex flex-col gap-1.5">
-              <div className="flex justify-between items-center">
-                <label className="font-mono text-[11px] uppercase tracking-wider text-on-surface-variant">Time Quantum (q)</label>
-                <span className="font-mono text-sm text-primary font-bold px-2 rounded bg-surface-container-lowest shadow-[inset_1px_1px_3px_rgba(0,0,0,0.7)]">{quantum} ms</span>
-              </div>
-              <input type="range" min={1} max={10} value={quantum} onChange={(e) => setQuantum(Number(e.target.value))} className="w-full h-2 rounded-full appearance-none cursor-pointer bg-surface-container-lowest accent-primary-container" />
-            </div>
-          </section>
-
-          <section className="neo-panel flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-primary-fixed-dim text-lg">format_list_bulleted</span>
-                <h2 className="font-display font-semibold tracking-tight">Process Table</h2>
-              </div>
-              <span className="font-mono text-[11px] text-on-surface-variant">{rows.length} Workloads</span>
-            </div>
-
-            <div className="overflow-x-auto neo-inset p-1.5">
-              <table className="w-full text-left font-mono text-sm border-collapse">
-                <thead>
-                  <tr className="text-on-surface-variant text-[11px] uppercase">
-                    <th className="p-1.5 font-medium">PID</th>
-                    <th className="p-1.5 font-medium text-center">Arrival</th>
-                    <th className="p-1.5 font-medium text-center">Burst</th>
-                    <th className="p-1.5 font-medium text-center">Prio</th>
-                    <th className="p-1.5 font-medium text-center">Q</th>
-                    <th className="p-1.5 font-medium text-center">IO in</th>
-                    <th className="p-1.5 font-medium text-center">IO dur</th>
-                    <th />
+        {/* Direct-input / results table */}
+        <div className="neo-inset min-h-0 flex-1 overflow-auto p-2">
+          <table className="w-full border-collapse text-left font-mono text-sm">
+            <thead className="sticky top-0 z-10 bg-[#0c0e12]">
+              <tr className="text-[11px] uppercase tracking-wider text-on-surface-variant">
+                <th className="px-3 py-3 font-medium">PID</th>
+                <th className="px-3 py-3 font-medium text-center" title="Arrival Time">AT</th>
+                <th className="px-3 py-3 font-medium text-center" title="Burst Time">BT</th>
+                {ioEnabled && (
+                  <>
+                    <th className="px-3 py-3 font-medium text-center" title="CPU units consumed before I/O begins">IO Arrival</th>
+                    <th className="px-3 py-3 font-medium text-center" title="I/O wait in ms (0 = no I/O)">IO Duration</th>
+                  </>
+                )}
+                <th className="px-3 py-3 font-medium text-center" title="Start Time">ST</th>
+                <th className="px-3 py-3 font-medium text-center" title="Completion Time">CT</th>
+                <th className="px-3 py-3 font-medium text-center" title="Turnaround Time">TAT</th>
+                <th className="px-3 py-3 font-medium text-center" title="Waiting Time">WT</th>
+                <th className="px-3 py-3 font-medium text-center" title="Response Time">RT</th>
+                <th className="px-3 py-3" />
+              </tr>
+            </thead>
+            <tbody className="text-on-surface">
+              {rows.map((r, i) => {
+                const metric = processMetrics.get(r.id);
+                return (
+                  <tr key={i} className="border-t border-surface-container-highest/70 transition-colors hover:bg-surface-container-high/40">
+                    <td className="px-3 py-2.5">
+                      <input className="neo-input w-24 font-bold text-primary-fixed" value={r.id} onChange={(e) => updateRow(i, "id", e.target.value)} />
+                    </td>
+                    <td className="px-3 py-2.5 text-center">
+                      <input type="number" min={i === 0 ? 0 : rows[i - 1].arrival + 1} className="neo-input w-20 text-center" title={i === 0 ? "Arrival must be 0 or later" : `Must arrive after ${rows[i - 1].id}`} value={r.arrival} onChange={(e) => updateRow(i, "arrival", e.target.value)} />
+                    </td>
+                    <td className="px-3 py-2.5 text-center">
+                      <input type="number" min={1} className="neo-input w-20 text-center" value={r.burst} onChange={(e) => updateRow(i, "burst", e.target.value)} />
+                    </td>
+                    {ioEnabled && (
+                      <>
+                        <td className="px-3 py-2.5 text-center">
+                          <input type="number" min={0} className="neo-input w-24 text-center" title="CPU units consumed before I/O begins" value={r.io_arrival ?? 0} onChange={(e) => updateRow(i, "io_arrival", e.target.value)} />
+                        </td>
+                        <td className="px-3 py-2.5 text-center">
+                          <input type="number" min={0} className="neo-input w-24 text-center" title="I/O wait in ms (0 = no I/O)" value={r.io_duration ?? 0} onChange={(e) => updateRow(i, "io_duration", e.target.value)} />
+                        </td>
+                      </>
+                    )}
+                    <td className={`px-3 py-2.5 text-center ${metric ? "text-primary-fixed" : "text-on-surface-variant/40"}`}>{formatMetric(metric?.started_at)}</td>
+                    <td className={`px-3 py-2.5 text-center ${metric ? "text-primary-fixed" : "text-on-surface-variant/40"}`}>{formatMetric(metric?.finished_at)}</td>
+                    <td className={`px-3 py-2.5 text-center ${metric ? "text-secondary-fixed" : "text-on-surface-variant/40"}`}>{formatMetric(metric?.turnaround)}</td>
+                    <td className={`px-3 py-2.5 text-center ${metric ? "text-secondary-fixed" : "text-on-surface-variant/40"}`}>{formatMetric(metric?.waiting)}</td>
+                    <td className={`px-3 py-2.5 text-center ${metric ? "text-secondary-fixed" : "text-on-surface-variant/40"}`}>{formatMetric(metric?.response)}</td>
+                    <td className="px-3 py-2.5 text-right">
+                      <button onClick={() => {
+                        clearRun();
+                        setRows(rows.filter((_, j) => j !== i));
+                      }} className="text-error text-sm" aria-label={`Remove ${r.id}`}>✕</button>
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="text-on-surface">
-                  {rows.map((r, i) => (
-                    <tr key={i} className="hover:bg-surface-container-high/40 transition-colors">
-                      <td className="p-1.5"><input className="neo-input w-16 font-bold text-primary-fixed" value={r.id} onChange={(e) => updateRow(i, "id", e.target.value)} /></td>
-                      <td className="p-1.5"><input type="number" min={0} className="neo-input w-14 text-center" value={r.arrival} onChange={(e) => updateRow(i, "arrival", e.target.value)} /></td>
-                      <td className="p-1.5"><input type="number" min={1} className="neo-input w-14 text-center" value={r.burst} onChange={(e) => updateRow(i, "burst", e.target.value)} /></td>
-                      <td className="p-1.5"><input type="number" className="neo-input w-12 text-center" value={r.priority} onChange={(e) => updateRow(i, "priority", e.target.value)} /></td>
-                      <td className="p-1.5"><input type="number" min={0} max={1} className="neo-input w-10 text-center" value={r.queue} onChange={(e) => updateRow(i, "queue", e.target.value)} /></td>
-                      <td className="p-1.5"><input type="number" min={0} className="neo-input w-12 text-center" title="CPU units consumed before I/O begins" value={r.io_arrival ?? 0} onChange={(e) => updateRow(i, "io_arrival", e.target.value)} /></td>
-                      <td className="p-1.5"><input type="number" min={0} className="neo-input w-12 text-center" title="I/O wait in ms (0 = no I/O)" value={r.io_duration ?? 0} onChange={(e) => updateRow(i, "io_duration", e.target.value)} /></td>
-                      <td className="p-1.5 text-right"><button onClick={() => setRows(rows.filter((_, j) => j !== i))} className="text-error text-xs">✕</button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Calculated averages stay directly below the table. */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {[
+            { label: "Average TAT", value: run?.result.metrics.avg_turnaround },
+            { label: "Average WT", value: run?.result.metrics.avg_waiting },
+            { label: "Average RT", value: run?.result.metrics.avg_response },
+          ].map((item) => (
+            <div key={item.label} className="neo-inset-sm flex items-center justify-between gap-3 px-4 py-3">
+              <span className="font-mono text-[11px] uppercase tracking-wider text-on-surface-variant">{item.label}</span>
+              <span className={`font-display text-2xl font-semibold ${run ? "text-primary" : "text-on-surface-variant/40"}`}>
+                {run ? formatAverage(item.value) : "—"}
+              </span>
             </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => setRows([...rows, { id: `P${rows.length + 1}`, arrival: 0, burst: 2, priority: 1, queue: 0, io_arrival: 0, io_duration: 0 }])} className="neo-btn flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-medium hover:text-primary">
-                <span className="material-symbols-outlined text-base">add_circle</span>Add Process
-              </button>
-              <button onClick={() => setRows(rows.map((r) => { const burst = 1 + Math.floor(Math.random() * 8); return { ...r, arrival: Math.floor(Math.random() * 4), burst, io_arrival: Math.floor(Math.random() * burst), io_duration: Math.floor(Math.random() * 4) }; }))} className="neo-btn flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-medium hover:text-secondary">
-                <span className="material-symbols-outlined text-base">shuffle</span>Randomize
-              </button>
-            </div>
-          </section>
-        </aside>
-
-        {/* RIGHT: Stage */}
-        <main className="xl:col-span-8 flex flex-col gap-6">
-          {error && <p className="text-sm text-error">{error}</p>}
-
-          {results.length === 0 && (
-            <div className="neo-panel text-center text-on-surface-variant font-mono text-sm py-16">
-              Configure parameters and hit <span className="text-primary">Run Simulation</span>.
-            </div>
-          )}
-
-          {results.length > 1 && (
-            <section className="neo-panel">
-              <h2 className="font-display font-semibold mb-3">Algorithm Comparison</h2>
-              <table className="w-full text-left font-mono text-sm">
-                <thead><tr className="text-on-surface-variant text-[11px] uppercase">
-                  <th className="p-1.5">Algorithm</th><th className="p-1.5">Avg wait</th><th className="p-1.5">Avg TAT</th><th className="p-1.5">Avg response</th><th className="p-1.5">Throughput</th><th className="p-1.5">CPU util</th><th className="p-1.5">Ctx switches</th>
-                </tr></thead>
-                <tbody>
-                  {results.map(({ algorithm, result }) => (
-                    <tr key={algorithm} className="border-t border-surface-container-highest">
-                      <td className="p-1.5 uppercase text-primary-fixed">{algorithm}</td>
-                      <td className="p-1.5">{String(result.metrics.avg_waiting)}</td>
-                      <td className="p-1.5">{String(result.metrics.avg_turnaround)}</td>
-                      <td className="p-1.5">{String(result.metrics.avg_response)}</td>
-                      <td className="p-1.5">{String(result.metrics.throughput)}</td>
-                      <td className="p-1.5">{String(result.metrics.cpu_utilization)}</td>
-                      <td className="p-1.5">{String(result.metrics.context_switches)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
-          )}
-
-          {results.map(({ algorithm, result }) => (
-            <ResultBlock key={algorithm} algorithm={algorithm} result={result} />
           ))}
-        </main>
-      </div>
+        </div>
+      </section>
+
+      {run && <ResultBlock algorithm={run.algorithm} result={run.result} />}
     </main>
   );
 }
@@ -250,7 +410,7 @@ function ResultBlock({ algorithm, result }: { algorithm: string; result: Simulat
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-primary animate-ping" />
-          <h2 className="font-display font-semibold tracking-tight uppercase">{algorithm} — Virtual Execution Timeline</h2>
+          <h2 className="font-display font-semibold tracking-tight uppercase">{algorithm} — Gantt Chart</h2>
         </div>
         <div className="neo-inset-sm px-4 py-2 text-sm font-mono">
           Hardware Core 0 — Executing <strong className="text-primary">{stepRunning ?? "idle"}</strong>
@@ -271,12 +431,12 @@ function ResultBlock({ algorithm, result }: { algorithm: string; result: Simulat
 
       <SimulationPlayer result={result} onIndex={setIndex} renderState={(step: Step) => <CpuStateView step={step} />} />
 
-      {/* Metrics */}
+      {/* Secondary metrics; TAT/WT/RT averages are shown under the table. */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        {["avg_waiting", "avg_turnaround", "avg_response", "throughput", "cpu_utilization", "context_switches"].map((k) => (
+        {["throughput", "cpu_utilization", "context_switches", "total_time"].map((k) => (
           <div key={k} className="neo-inset-sm p-3">
             <p className="font-mono text-[10px] uppercase text-on-surface-variant">{k.replaceAll("_", " ")}</p>
-            <p className="font-display font-semibold">{String(result.metrics[k])}</p>
+            <p className="font-display font-semibold">{formatMetric(result.metrics[k])}</p>
           </div>
         ))}
       </div>

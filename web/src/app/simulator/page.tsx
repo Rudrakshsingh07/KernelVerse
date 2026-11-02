@@ -1,11 +1,12 @@
 import Link from "next/link";
 
 const TOPICS = [
-  { slug: "cpu-scheduling", name: "CPU Scheduling", status: "Complete", icon: "speed", desc: "FCFS, SJF, SRTF, Priority, Round Robin, Multilevel Queue" },
+  { slug: "cpu-scheduling", name: "CPU Scheduling", status: "Complete", icon: "speed", desc: "FCFS, SJF, SRTF, Round Robin" },
   { slug: "memory-management", name: "Memory Management", status: "Complete", icon: "memory_alt", desc: "Contiguous allocation, first/best/worst fit, segmentation" },
   { slug: "paging", name: "Paging", status: "Complete", icon: "grid_view", desc: "FIFO, LRU, Optimal replacement, TLB behavior" },
-  { slug: "disk-scheduling", name: "Disk Scheduling", status: "Planned", icon: "hard_drive", desc: "FCFS, SSTF, SCAN, C-SCAN, LOOK" },
-  { slug: "deadlocks", name: "Deadlocks", status: "Planned", icon: "lock", desc: "Coffman conditions, detection, Banker's algorithm" },
+  { slug: "cache", name: "Cache", status: "Complete", icon: "memory", desc: "Direct-mapped and set-associative caches, FIFO/LRU replacement" },
+  { slug: "disk-scheduling", name: "Disk Scheduling", status: "Complete", icon: "hard_drive", desc: "FCFS, SSTF, SCAN, C-SCAN, LOOK" },
+  { slug: "deadlocks", name: "Deadlocks", status: "Complete", icon: "lock", desc: "Banker's algorithm: safe states and all safe sequences" },
 ];
 
 export default function SimulatorIndex() {
