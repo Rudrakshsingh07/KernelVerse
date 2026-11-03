@@ -1,12 +1,11 @@
 import Link from "next/link";
 
 const TOPICS = [
-  { slug: "cpu-scheduling", name: "CPU Scheduling", status: "Complete", icon: "speed", desc: "FCFS, SJF, SRTF, Round Robin" },
-  { slug: "memory-management", name: "Memory Management", status: "Complete", icon: "memory_alt", desc: "Contiguous allocation, first/best/worst fit, segmentation" },
-  { slug: "paging", name: "Paging", status: "Complete", icon: "grid_view", desc: "FIFO, LRU, Optimal replacement, TLB behavior" },
-  { slug: "cache", name: "Cache", status: "Complete", icon: "memory", desc: "Direct-mapped and set-associative caches, FIFO/LRU replacement" },
-  { slug: "disk-scheduling", name: "Disk Scheduling", status: "Complete", icon: "hard_drive", desc: "FCFS, SSTF, SCAN, C-SCAN, LOOK" },
-  { slug: "deadlocks", name: "Deadlocks", status: "Complete", icon: "lock", desc: "Banker's algorithm: safe states and all safe sequences" },
+  { slug: "cpu-scheduling", name: "CPU Scheduling", icon: "speed", desc: "FCFS, SJF, SRTF, Round Robin" },
+  { slug: "paging", name: "Paging", icon: "grid_view", desc: "FIFO, LRU, Optimal replacement, TLB behavior" },
+  { slug: "cache", name: "Cache", icon: "memory", desc: "Direct-mapped and set-associative caches, FIFO/LRU replacement" },
+  { slug: "disk-scheduling", name: "Disk Scheduling", icon: "hard_drive", desc: "FCFS, SSTF, SCAN, C-SCAN, LOOK" },
+  { slug: "deadlocks", name: "Deadlocks", icon: "lock", desc: "Banker's algorithm: safe states and all safe sequences" },
 ];
 
 export default function SimulatorIndex() {
@@ -19,7 +18,6 @@ export default function SimulatorIndex() {
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-primary-fixed-dim">{t.icon}</span>
               <Link href={`/simulator/${t.slug}`} className="font-display text-lg font-semibold hover:text-primary transition-colors">{t.name}</Link>
-              <span className="ml-auto font-mono text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-surface-container-lowest text-on-surface-variant shadow-[inset_1px_1px_3px_rgba(0,0,0,0.7)]">{t.status}</span>
             </div>
             <p className="text-sm text-on-surface-variant">{t.desc}</p>
           </li>

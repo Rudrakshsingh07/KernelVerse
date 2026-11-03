@@ -48,7 +48,7 @@ api/
 │       ├── cpu_scheduling.py         # FCFS, SJF, SRTF, Round Robin (+ I/O blocking)
 │       ├── memory_management.py      # contiguous allocation & segmentation; first/best/worst-fit strategies
 │       ├── paging.py                 # FIFO, LRU, Optimal page replacement + optional TLB simulation
-│       ├── cache.py                  # direct-mapped / set-associative cache with FIFO, LRU, MRU or OPT replacement
+│       ├── cache.py                  # direct-mapped / set-associative cache with FIFO, LRU or MRU replacement
 │       ├── deadlocks.py              # Banker's safety algorithm + wait-for-graph deadlock detection
 │       └── disk_scheduling.py        # FCFS, SSTF, SCAN, C-SCAN, LOOK disk head scheduling
 ```
@@ -60,7 +60,7 @@ api/
 | `cpu_scheduling.py` | FCFS, SJF, SRTF, Round Robin |
 | `memory_management.py` | Contiguous allocation, segmentation, first/best/worst-fit |
 | `paging.py` | FIFO, LRU, Optimal page replacement, TLB hits/misses |
-| `cache.py` | Direct-mapped / set-associative cache, FIFO / LRU / MRU / OPT replacement, hits/misses/evictions |
+| `cache.py` | Direct-mapped / set-associative cache, FIFO / LRU / MRU replacement, hits/misses/evictions |
 | `deadlocks.py` | Banker's avoidance (all safe sequences), wait-for-graph detection |
 | `disk_scheduling.py` | FCFS, SSTF, SCAN, C-SCAN, LOOK (engine-selected sweep direction) |
 

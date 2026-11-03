@@ -29,7 +29,7 @@ ENGINES = {
     "cpu-scheduling": cpu_scheduling,   # FCFS, SJF, SRTF, RR
     "memory-management": memory_management,  # contiguous + segmentation, fit strategies
     "paging": paging,                   # FIFO, LRU, Optimal page replacement (+ TLB)
-    "cache": cache,                     # FIFO / LRU / MRU / OPT set-associative cache
+    "cache": cache,                     # FIFO / LRU / MRU set-associative cache
     "deadlocks": deadlocks,             # Banker's avoidance + wait-for-graph detection
     "disk-scheduling": disk_scheduling, # FCFS, SSTF, SCAN, C-SCAN, LOOK
 }
