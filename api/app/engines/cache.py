@@ -3,20 +3,17 @@ Cache simulation engine.
 
 Models a set-associative data cache over a sequence of memory block
 references.  Each block maps to a set with ``block % number_of_sets``; the
-cache chooses a line within that set using FIFO, LRU, MRU or OPT replacement.
+cache chooses a line within that set using FIFO, LRU or MRU replacement.
 
 Replacement policies:
 
     fifo - evict the block that entered the set first.
     lru  - evict the least recently used block in the set.
     mru  - evict the most recently used block in the set.
-    opt  - evict the block whose next use is furthest in the future
-           (Belady's optimal algorithm; ties and never-used blocks are
-           resolved in favour of the first matching line).
 
-An associativity of 1 is a direct-mapped cache.  An associativity equal to the
-number of lines is a fully associative cache.  Values in between model an
-N-way set-associative cache.
+One line per set is a direct-mapped cache.  A set containing every line is a
+fully associative cache.  Values in between model a set-associative cache with
+N lines per set.
 
 Public contract (see base.py):
     validate(payload) -> list[str]
@@ -30,7 +27,7 @@ from typing import Any
 
 from .base import SimulationResult, Step
 
-ALGORITHMS = ["fifo", "lru", "mru", "opt"]
+ALGORITHMS = ["fifo", "lru", "mru"]
 
 
 def validate(payload: dict[str, Any]) -> list[str]:
@@ -61,12 +58,12 @@ def validate(payload: dict[str, Any]) -> list[str]:
 
     associativity = payload.get("associativity", 1)
     if not isinstance(associativity, int) or associativity < 1:
-        errors.append("associativity must be an integer >= 1")
+        errors.append("lines per set must be an integer >= 1")
     elif isinstance(cache_lines, int) and cache_lines >= 1:
         if associativity > cache_lines:
-            errors.append("associativity cannot exceed cache_lines")
+            errors.append("lines per set cannot exceed cache_lines")
         elif cache_lines % associativity != 0:
-            errors.append("cache_lines must be divisible by associativity")
+            errors.append("cache_lines must be divisible by lines per set")
 
     return errors
 
@@ -79,7 +76,7 @@ def run(payload: dict[str, Any]) -> SimulationResult:
       1. Map it to a set.
       2. If it is resident in that set, count a hit.
       3. Otherwise count a miss, use a free line when possible, or evict a
-         victim chosen by FIFO/LRU/MRU/OPT.
+         victim chosen by FIFO/LRU/MRU.
       4. Record a step with the complete cache line contents.
 
     Returns:
@@ -138,20 +135,11 @@ def run(payload: dict[str, Any]) -> SimulationResult:
                         resident,
                         key=lambda page: last_used.get(page, -1),
                     )
-                elif algorithm == "mru":
+                else:  # mru
                     evicted = max(
                         resident,
                         key=lambda page: last_used.get(page, -1),
                     )
-                else:  # opt — Belady's optimal replacement
-                    def next_use(page: int) -> int:
-                        """Index of the next reference to ``page``, or infinity."""
-                        try:
-                            return references.index(page, index + 1)
-                        except ValueError:
-                            return len(references)
-
-                    evicted = max(resident, key=next_use)
                 slot = lines.index(evicted)
                 evictions += 1
                 fifo_queues[set_index] = deque(

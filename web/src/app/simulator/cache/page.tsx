@@ -9,7 +9,6 @@ const ALGORITHMS = [
   { id: "fifo", label: "FIFO", desc: "Replace the block that entered the set first." },
   { id: "lru", label: "LRU", desc: "Replace the block in the set used longest ago." },
   { id: "mru", label: "MRU", desc: "Replace the block in the set used most recently." },
-  { id: "opt", label: "OPT", desc: "Evict the block whose next use is furthest away (Belady)." },
 ] as const;
 
 type Algorithm = (typeof ALGORITHMS)[number]["id"];
@@ -21,10 +20,10 @@ const PRESETS = [
     lines: 4,
     ways: 1,
     algorithm: "lru" as Algorithm,
-    note: "One way per set — each block has exactly one possible line.",
+    note: "One line per set — each block maps to exactly one line.",
   },
   {
-    name: "2-way LRU",
+    name: "2 lines/set LRU",
     refs: "0 1 2 3 0 4 1 5 0 1 2 3",
     lines: 4,
     ways: 2,
@@ -138,13 +137,13 @@ export default function CachePage() {
       errors.push("Cache lines must be a whole number of at least 1.");
     }
     if (!Number.isInteger(ways) || ways < 1) {
-      errors.push("Associativity must be a whole number of at least 1.");
+      errors.push("Lines per set must be a whole number of at least 1.");
     }
     if (Number.isInteger(lines) && Number.isInteger(ways) && ways >= 1) {
       if (ways > lines) {
-        errors.push("Associativity cannot exceed the number of cache lines.");
+        errors.push("Lines per set cannot exceed the number of cache lines.");
       } else if (lines % ways !== 0) {
-        errors.push("Cache lines must be divisible by associativity.");
+        errors.push("Cache lines must be divisible by lines per set.");
       }
     }
     return errors;
@@ -230,7 +229,7 @@ export default function CachePage() {
           </span>
           <span className="text-on-surface-variant">·</span>
           <span className="font-mono text-xs font-semibold text-primary-fixed">
-            {labelFor(algorithm)} · {lines} lines · {ways}-way
+            {labelFor(algorithm)} · {lines} lines · {ways} lines/set
           </span>
         </div>
         <button
@@ -339,7 +338,7 @@ export default function CachePage() {
                 />
               </label>
               <label className="flex flex-col gap-1 font-mono text-[10px] uppercase tracking-wider text-on-surface-variant">
-                Associativity
+                Lines per set
                 <input
                   type="number"
                   min={1}
@@ -366,7 +365,7 @@ export default function CachePage() {
 
             <p className="font-mono text-[9px] leading-relaxed text-on-surface-variant">
               Block → set mapping is <span className="text-primary-fixed-dim">block % sets</span>.
-              1-way is direct mapped; lines = associativity is fully associative.
+              1 line per set is direct mapped; all lines in one set is fully associative.
             </p>
 
             {validationErrors.length > 0 && (
@@ -484,7 +483,7 @@ function ResultBlock({ entry }: { entry: ResultEntry }) {
             lines <strong className="text-primary">{lines}</strong>
           </span>
           <span className="neo-inset-sm px-2 py-1">
-            ways <strong className="text-primary-fixed-dim">{ways}</strong>
+            lines/set <strong className="text-primary-fixed-dim">{ways}</strong>
           </span>
           <span className="neo-inset-sm px-2 py-1">
             requests <strong className="text-primary-fixed-dim">{result.steps.length}</strong>
@@ -608,7 +607,7 @@ function CacheRunTable({
                   key={lineIndex}
                   className="min-w-11 border-l border-surface-container-highest/40 px-1 py-1 font-medium"
                 >
-                  S{Math.floor(lineIndex / ways)}W{lineIndex % ways}
+                  S{Math.floor(lineIndex / ways)}L{lineIndex % ways}
                 </th>
               ))}
               <th className="min-w-14 border-l border-surface-container-highest px-2 py-1 font-medium">

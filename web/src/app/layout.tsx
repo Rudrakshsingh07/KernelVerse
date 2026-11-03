@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "KernelVerse — OS Concepts Simulator",
-  description: "Interactive OS concepts simulator: CPU scheduling, memory management, paging, cache, disk scheduling, and deadlocks visualized step by step.",
+  description: "Interactive OS concepts simulator: CPU scheduling, paging, cache, disk scheduling, and deadlocks visualized step by step.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -31,7 +31,6 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             </Link>
             <nav className="hidden lg:flex items-center gap-1 p-1 rounded-xl bg-surface-container-lowest shadow-[inset_2px_2px_6px_rgba(0,0,0,0.8)]">
               <Link href="/simulator/cpu-scheduling" className="px-4 py-2 rounded-lg text-sm text-on-surface-variant hover:text-on-surface transition-all">CPU Scheduling</Link>
-              <Link href="/simulator/memory-management" className="px-4 py-2 rounded-lg text-sm text-on-surface-variant hover:text-on-surface transition-all">Memory Management</Link>
               <Link href="/simulator/paging" className="px-4 py-2 rounded-lg text-sm text-on-surface-variant hover:text-on-surface transition-all">Paging</Link>
               <Link href="/simulator/cache" className="px-4 py-2 rounded-lg text-sm text-on-surface-variant hover:text-on-surface transition-all">Cache</Link>
               <Link href="/simulator/disk-scheduling" className="px-4 py-2 rounded-lg text-sm text-on-surface-variant hover:text-on-surface transition-all">Disk Scheduling</Link>

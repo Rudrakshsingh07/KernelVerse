@@ -7,7 +7,7 @@ Topics in scope (build order):
 1. CPU Scheduling — FCFS, SJF, SRTF, Round Robin (with I/O blocking)
 2. Memory Management — contiguous allocation (first/best/worst fit) + segmentation, fragmentation
 3. Paging — FIFO / LRU / Optimal replacement, optional TLB
-4. Cache — direct-mapped and set-associative caches, FIFO / LRU / MRU / OPT replacement
+4. Cache — direct-mapped and set-associative caches, FIFO / LRU / MRU replacement
 5. Deadlocks — Banker's algorithm: safe states and every possible safe sequence
 6. Disk Scheduling — FCFS, SSTF, SCAN, C-SCAN, LOOK
 

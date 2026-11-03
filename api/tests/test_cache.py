@@ -36,6 +36,10 @@ class CacheValidationTests(unittest.TestCase):
         errors = cache.validate(cache_payload(algorithm="random"))
         self.assertTrue(any("algorithm" in error for error in errors))
 
+    def test_opt_algorithm_is_rejected(self) -> None:
+        errors = cache.validate(cache_payload(algorithm="opt"))
+        self.assertTrue(any("algorithm" in error for error in errors))
+
     def test_empty_references_are_rejected(self) -> None:
         errors = cache.validate(cache_payload(references=[]))
         self.assertTrue(any("references" in error for error in errors))
@@ -85,32 +89,6 @@ class CacheEngineTests(unittest.TestCase):
         self.assertEqual(result["steps"][2]["state"]["evicted"], 2)
         self.assertEqual(result["metrics"]["hits"], 1)
         self.assertEqual(result["metrics"]["misses"], 3)
-
-    def test_opt_evicts_block_used_furthest_in_future(self) -> None:
-        payload = cache_payload(
-            algorithm="opt",
-            references=[1, 2, 3, 2],
-            cache_lines=2,
-            associativity=2,
-        )
-        result = cache.run(payload).model_dump()
-        # At the miss for block 3, block 2 is needed again but block 1 never
-        # returns, so OPT evicts block 1.
-        self.assertEqual(result["steps"][2]["state"]["evicted"], 1)
-        self.assertEqual(result["metrics"]["hits"], 1)
-        self.assertEqual(result["metrics"]["misses"], 3)
-
-    def test_opt_evicts_a_never_used_block_before_a_pending_one(self) -> None:
-        payload = cache_payload(
-            algorithm="opt",
-            references=[1, 2, 3, 1],
-            cache_lines=2,
-            associativity=2,
-        )
-        result = cache.run(payload).model_dump()
-        # Block 2 is never referenced again while block 1 is, so OPT evicts 2.
-        self.assertEqual(result["steps"][2]["state"]["evicted"], 2)
-        self.assertEqual(result["metrics"]["hits"], 1)
 
     def test_direct_mapped_hit_in_own_line(self) -> None:
         payload = cache_payload(
